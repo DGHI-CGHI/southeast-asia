@@ -1,0 +1,14 @@
+md5: 53a945cea562ed56e5f6e049d4e46788
+frozen: true
+deps:
+- md5: d751713988987e9331980363e24189ce.dir
+  size: 0
+  nfiles: 0
+  hash: md5
+  path: s3://dghi-chi/data/se-asia/sri-lanka-disease-surveillance/era5/
+outs:
+- md5: d751713988987e9331980363e24189ce.dir
+  size: 0
+  nfiles: 0
+  hash: md5
+  path: era5
