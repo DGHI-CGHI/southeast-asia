@@ -1,4 +1,5 @@
 [core]
     remote = cache-s3
+    autostage = true
 ['remote "cache-s3"']
     url = s3://dghi-chi/dvc-cache/se-asia/sri-lanka-ds
