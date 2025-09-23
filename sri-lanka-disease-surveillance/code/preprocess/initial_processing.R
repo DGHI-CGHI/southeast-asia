@@ -1,5 +1,5 @@
 ################################################################################
-# CHI ??? Sri Lanka WER - Initial Processing Pipeline
+# CHI  Sri Lanka WER - Initial Processing Pipeline
 # File: analysis/sri_lanka/initial_processing.R
 #
 # **
@@ -99,45 +99,59 @@ Sys.setenv("JAVA_HOME"="C:/Program Files/Eclipse Adoptium/jdk-17.0.16.8-hotspot"
 library(tabulapdf)       # ropensci fork; requires rJava
 library(tabulizerjars)
 
-#################
-#################
+# ------------------------------------------------------------------------------
+# 0) CONFIG
+# ------------------------------------------------------------------------------
+# Summary: Define project-relative paths using cfg (from .Rprofile) + p() helper.
 
-CHI_LOCAL_WORK  <- Sys.getenv("CHI_LOCAL_WORK",  unset = "C:/Users/jordan/Desktop/srilanka")
-CHI_GITHUB_ROOT <- Sys.getenv("CHI_GITHUB_ROOT", unset = "C:/Users/jordan/R_Projects/CHI-Data")
+# 1) No setwd() and no absolute C:\ paths
+#    Everything below is relative to the Sri Lanka subproject root.
 
-setwd(CHI_GITHUB_ROOT)
-
+# Where to put scratch outputs during processing
 paths <- list(
-  temp_dir      = file.path(CHI_LOCAL_WORK, "temp"),
-  work_out      = file.path(CHI_LOCAL_WORK, "outputs"),
-  # Source inputs (checked into repo)
-  midyear_pop   = file.path(CHI_GITHUB_ROOT, "analysis/sri_lanka/inputs/Mid-year_population_by_district_and_sex_2024.pdf"),
-  wx_stations   = file.path(CHI_GITHUB_ROOT, "analysis/sri_lanka/inputs/station_data/SriLanka_Weather_Dataset.csv"),
-  era5_daily    = file.path(CHI_GITHUB_ROOT, "analysis/sri_lanka/inputs/srilanka_district_daily_era5_areawt.csv"),
-  fig_dir       = file.path(CHI_GITHUB_ROOT, "analysis/sri_lanka/outputs/figures")
+  temp_dir = p(cfg$paths$intermediate, "temp"),
+  work_out = p(cfg$paths$intermediate, "outputs"),
+  helpers  = p('code/helpers/helpers.R')
 )
 
 
-paths = c(paths, 
-          
-          outputs = list(
-            
-            pdf_index_csv = file.path(CHI_GITHUB_ROOT, 'analysis/sri_lanka/outputs/sri_lanka_WER_index_of_pdfs.csv'),
-            case_counts_txt = file.path(CHI_GITHUB_ROOT, 'analysis/sri_lanka/outputs/disease_counts_v4.txt')
-            
-          )
+# 2) Source inputs that should live in the project repo:
+#    Recommend moving PDFs/CSVs under data/raw or data/raw/external.
+#    For now, keep your current filenames but make them relative.
+paths$midyear_pop <- p(cfg$paths$raw, "Mid-year_population_by_district_and_sex_2024.pdf")
+paths$wx_stations <- p(cfg$paths$raw , "SriLanka_Weather_Dataset.csv")
+paths$era5_daily  <- p(cfg$paths$raw, "srilanka_district_daily_era5_areawt.csv")
+
+
+# 3) Output figures directory inside project
+paths$fig_dir <- p(cfg$paths$reports, "figures")
+
+# 4) Additional named outputs (project-relative)
+paths$outputs <- list(
+  era5_weekly_aggregated = p(cfg$path$intermediate, 'srilanka_district_daily_era5_areawt.csv'),
+  pdf_index_csv   = p(cfg$path$intermediate, 
+                      "sri_lanka_WER_index_of_pdfs.csv"),
+  case_counts_txt = p(cfg$path$intermediate, 
+                      "disease_counts_v4.txt")
 )
 
+# 5) ERA5 root **local path** (hydrated by DVC), not s3://
+#    DVC should import/pull into data/raw/era5/
+era5_root <- p(cfg$paths$raw, "era5")
+# era5_root <- "s3://dghi-chi/data/se-asia/sri-lanka-disease-surveillance/era5/"
 
-dir.create(paths$temp_dir, recursive = TRUE, showWarnings = FALSE)
-dir.create(paths$fig_dir, recursive = TRUE, showWarnings = FALSE)
-dir.create(paths$fig_dir, recursive = TRUE, showWarnings = FALSE)
 
-# ?????? 0.3 Helper function sources ------------------------------------------------
+# 6) Create any needed directories once (safe if they already exist)
+ensure_dir <- function(...) dir.create(p(...), recursive = TRUE, showWarnings = FALSE)
+ensure_dir(cfg$paths$intermediate, "temp")
+ensure_dir(cfg$paths$intermediate, "outputs")
+ensure_dir(cfg$paths$reports, "figures")
+
+
+# 0.3 Helper function sources ------------------------------------------------
 # These must define: DISEASES, POS_MAP, norm_dist(), .norm(), .is_footer(),
 # .parse_ints(), .extract_district_from_row(), .pick_n(), DIST_CANON
-source(file.path(CHI_GITHUB_ROOT, "/helpers/helpers.R"))
-source(file.path(CHI_GITHUB_ROOT, "/analysis/sri_lanka/helpers.R"))
+source(paths$helpers)
 
 ################################################################################
 # 1) INDEX WER PDFS -------------------------------------------------------------
@@ -145,7 +159,7 @@ source(file.path(CHI_GITHUB_ROOT, "/analysis/sri_lanka/helpers.R"))
 # Goal: Crawl the WER landing page and construct an absolute list of .pdf URLs,
 #       then parse volume/issue to derive a weekly date window where possible.
 
-# ?????? 1.1 Crawl & collect absolute PDF URLs -------------------------------------
+#  1.1 Crawl & collect absolute PDF URLs -------------------------------------
 wer_base <- "https://www.epid.gov.lk"
 wer_url  <- paste0(wer_base, "/weekly-epidemiological-report")
 
@@ -155,12 +169,12 @@ pdfs     <- unique(grep("\\.pdf$", hrefs, value = TRUE))
 pdfs     <- ifelse(startsWith(pdfs, "http"), pdfs, paste0(wer_base, pdfs))
 
 
-# ?????? 1.2 Parse vol/issue ??? weekly date range (Vol ??? 34) ------------------------
+#  1.2 Parse vol/issue  weekly date range (Vol  34) ------------------------
 # Anchor: Vol 34 No 1 -> week ending 2007-01-05 (Sat-Fri window).
 parse_issue_from_filename_v34plus <- function(u) {
   f <- basename(u)
-  vol   <- suppressWarnings(as.integer(str_match(f, "(?i)vol[._ -]*(\\d+)")[,2]))
-  issue <- suppressWarnings(as.integer(str_match(f, "(?i)no[._ -]*(\\d+)")[,2]))
+  vol   <- suppressWarnings(as.integer(str_match(f, "(i)vol[._ -]*(\\d+)")[,2]))
+  issue <- suppressWarnings(as.integer(str_match(f, "(i)no[._ -]*(\\d+)")[,2]))
   
   # Anchor: Vol 34 No 1 -> Week ending 2007-01-05 (Sat-Fri window)
   base_start <- as.Date("2006-12-30")
@@ -188,10 +202,8 @@ parse_issue_from_filename_v34plus <- function(u) {
 idx <- rbindlist(lapply(pdfs, parse_issue_from_filename_v34plus), fill = TRUE)
 idx <- idx[!is.na(url)]
 
-# ?????? 1.3 Persist the index for reproducibility ---------------------------------
-idx_path <- paths$outputs.pdf_index_csv
-fwrite(idx, idx_path)
-
+#  1.3 Persist the index for reproducibility ---------------------------------
+fwrite(idx, paths$outputs$pdf_index_csv)
 
 ################################################################################
 # 2) EXTRACT DISEASE TABLES FROM PDFs ------------------------------------------
@@ -201,7 +213,7 @@ fwrite(idx, idx_path)
 #       position-based mapping (two columns per disease: *_A, *_B).
 #       Returns a wide format with one row per district per PDF table row.
 
-# ?????? 2.1 Core extractor (position-based A/B pairs across all pages) ------------
+#  2.1 Core extractor (position-based A/B pairs across all pages) ------------
 extract_all_diseases_by_position <- function(
     pdf_path,
     diseases = DISEASES,
@@ -235,7 +247,7 @@ extract_all_diseases_by_position <- function(
       
       district <- .extract_district_from_row(s_row)
       if (!nzchar(district)) next
-      if (!keep_total && grepl("(?i)^sri\\s*lanka$", district)) next
+      if (!keep_total && grepl("(i)^sri\\s*lanka$", district)) next
       
       ints <- .parse_ints(s_row)
       
@@ -280,7 +292,7 @@ extract_all_diseases_by_position <- function(
   out[]
 }
 
-# ?????? 2.2 Batch extractor over indexed PDFs -------------------------------------
+#  2.2 Batch extractor over indexed PDFs -------------------------------------
 # Strategy:
 #   . If index row contains a URL, download to tempfile; else use local path
 #   . Extract tables; attach normalized district names + WER week dates
@@ -288,7 +300,7 @@ allresults <- vector("list", nrow(idx))
 for (i in seq_len(nrow(idx))) {
   cur <- idx[i]
   file <- cur$file
-  if (grepl("^https?://", cur$url, ignore.case = TRUE)) {
+  if (grepl("^https://", cur$url, ignore.case = TRUE)) {
     tf <- tempfile(fileext = ".pdf")
     ok <- try(utils::download.file(cur$url, tf, mode = "wb", quiet = TRUE), silent = TRUE)
     if (inherits(ok, "try-error")) { allresults[[i]] <- data.table(); next }
@@ -309,14 +321,20 @@ for (i in seq_len(nrow(idx))) {
   if (i %% 25 == 0) message(".processed ", i, " PDFs")
 }
 
-# ?????? 2.3 Post-process + persist for downstream scripts -------------------------
+#  2.3 Post-process + persist for downstream scripts -------------------------
 lepto_dt <- rbindlist(allresults, fill = TRUE)
 
 lepto_dt[, `:=`(lepto = as.integer(leptospirosis_A),
                 dengue = as.integer(dengue_A),
                 year   = year(date_start))]
 
-fwrite(lepto_dt, paths$outputs.case_counts_txt)
+
+
+fwrite(lepto_dt, paths$outputs$case_counts_txt)
 
 # End of script.
+#####################!
+
+
+
 ################################################################################

@@ -59,51 +59,53 @@ suppressPackageStartupMessages({
 # ------------------------------------------------------------------------------
 # 0) CONFIG
 # ------------------------------------------------------------------------------
+# Summary: Define project-relative paths using cfg (from .Rprofile) + p() helper.
 
-# source(here("helpers", "helpers.R"))  # expected to provide norm_dist(), etc.
+# 1) No setwd() and no absolute C:\ paths
+#    Everything below is relative to the Sri Lanka subproject root.
 
-#################
-#################
-
-CHI_LOCAL_WORK  <- Sys.getenv("CHI_LOCAL_WORK",  unset = "C:/Users/jordan/Desktop/srilanka")
-CHI_GITHUB_ROOT <- Sys.getenv("CHI_GITHUB_ROOT", unset = "C:/Users/jordan/R_Projects/CHI-Data")
-
-setwd(CHI_GITHUB_ROOT)
-
+# Where to put scratch outputs during processing
 paths <- list(
-  temp_dir      = file.path(CHI_LOCAL_WORK, "temp"),
-  work_out      = file.path(CHI_LOCAL_WORK, "outputs"),
-  # Source inputs (checked into repo)
-  midyear_pop   = file.path(CHI_GITHUB_ROOT, "analysis/sri_lanka/inputs/Mid-year_population_by_district_and_sex_2024.pdf"),
-  wx_stations   = file.path(CHI_GITHUB_ROOT, "analysis/sri_lanka/inputs/station_data/SriLanka_Weather_Dataset.csv"),
-  era5_daily    = file.path(CHI_GITHUB_ROOT, "analysis/sri_lanka/inputs/srilanka_district_daily_era5_areawt.csv"),
-  fig_dir       = file.path(CHI_GITHUB_ROOT, "analysis/sri_lanka/outputs/figures")
+  temp_dir = p(cfg$paths$intermediate, "temp"),
+  work_out = p(cfg$paths$intermediate, "outputs")
 )
 
 
-paths = c(paths, 
-          
-          outputs = list(
-            
-            pdf_index_csv = file.path(CHI_GITHUB_ROOT, 'analysis/sri_lanka/outputs/sri_lanka_WER_index_of_pdfs.csv'),
-            case_counts_txt = file.path(CHI_GITHUB_ROOT, 'analysis/sri_lanka/outputs/disease_counts_v4.txt')
-            
-          )
+# 2) Source inputs that should live in the project repo:
+#    Recommend moving PDFs/CSVs under data/raw or data/raw/external.
+#    For now, keep your current filenames but make them relative.
+paths$midyear_pop <- p(cfg$paths$raw, "Mid-year_population_by_district_and_sex_2024.pdf")
+paths$wx_stations <- p(cfg$paths$raw , "SriLanka_Weather_Dataset.csv")
+paths$era5_daily  <- p(cfg$paths$raw, "srilanka_district_daily_era5_areawt.csv")
+
+
+# 3) Output figures directory inside project
+paths$fig_dir <- p(cfg$paths$reports, "figures")
+
+# 4) Additional named outputs (project-relative)
+paths$outputs <- list(
+  era5_weekly_aggregated = p(cfg$path$intermediate, 'srilanka_district_daily_era5_areawt.csv'),
+  pdf_index_csv   = p("analysis", "sri_lanka", "outputs",
+                      "sri_lanka_WER_index_of_pdfs.csv"),
+  case_counts_txt = p("analysis", "sri_lanka", "outputs",
+                      "disease_counts_v4.txt")
 )
 
-
-# Path holding ERA5 parquet folders, one folder per year (e.g., 1980, 1981, .)
+# 5) ERA5 root **local path** (hydrated by DVC), not s3://
+#    DVC should import/pull into data/raw/era5/
+era5_root <- p(cfg$paths$raw, "era5")
 era5_root <- "s3://dghi-chi/data/se-asia/sri-lanka-disease-surveillance/era5/"
-era5_root <- "sri-lanka/disease/surveillance/data/raw/era5"  # use relative path in scripts
+era5_root <- 's3://dghi-chi/data/se-asia/sri-lanka-disease-surveillance/era5/'
+# era5_root = "https://dghi-chi.s3.amazonaws.com/data/se-asia/sri-lanka-disease-surveillance/era5"
+# 6) Create any needed directories once (safe if they already exist)
+ensure_dir <- function(...) dir.create(p(...), recursive = TRUE, showWarnings = FALSE)
+ensure_dir(cfg$paths$intermediate, "temp")
+ensure_dir(cfg$paths$intermediate, "outputs")
+ensure_dir(cfg$paths$reports, "figures")
 
-# Analysis years (adjust as needed)
-years_all   <- 2006:2024
-
-# Timezone handling:
-#   ERA5 validTime is UTC; we localize to Asia/Colombo (+5:30) BEFORE daily agg
-tz_local      <- "Asia/Colombo"
-tz_offset_sec <- as.integer(5.5 * 3600)
-
+# ------------------------------------------------------------------------------
+# ------------------------------------------------------------------------------
+# ------------------------------------------------------------------------------
 # ------------------------------------------------------------------------------
 # 1) COLUMN MAP (edit if parquet schema differs)
 #   Many ERA5 variables are stored as "scaled by 10" integers; we unscale below.
@@ -119,12 +121,22 @@ VAR_TA10      <- "ta_scaled10_degC"     # air temp (°C * 10)
 VAR_TD10      <- "td_scaled10_degC"     # dewpoint (°C * 10)
 VAR_WBGT10    <- "wbgt_scaled10_degC"   # WBGT (°C * 10); may be absent
 VAR_WIND10    <- "wind2m_scaled10_ms1"  # wind (m/s * 10); fallback handled below
-
 VAR_MTPR      <- "mtpr"                  # precip rate (assumed mm/day after daily sum here)
 VAR_TP        <- "tp"                    # total precipitation (m); sum to daily
-
 VAR_LATIDX    <- "lat_idx_x4"            # 0.25° grid center index  lat = idx/4
 VAR_LONIDX    <- "lon_idx_x4"            # 0.25° grid center index  lon = idx/4
+
+# ------------------------
+# Timezone handling:
+#   ERA5 validTime is UTC; we localize to Asia/Colombo (+5:30) BEFORE daily agg
+tz_local      <- "Asia/Colombo"
+tz_offset_sec <- as.integer(5.5 * 3600)
+
+
+# ------------------------
+# Analysis years (adjust as needed)
+years_all   <- 2014:2024
+
 
 # ------------------------------------------------------------------------------
 # 2) SMALL HELPERS
@@ -137,12 +149,19 @@ workability <- function(wbgt, steepness = 0.6, midpoint = 30) {
   100 * (1 - 1 / (1 + exp(-steepness * (wbgt - midpoint))))
 }
 
-# Great-circle small-distance approximation (not used in final pipeline)
+# Great-circle small-distance approximation
 dist2_m2 <- function(lon1, lat1, lon2, lat2) {
   r <- 6371000
   x <- (lon2 - lon1) * cos((lat1 + lat2) * pi / 360)
   y <- (lat2 - lat1)
   (r * pi / 180)^2 * (x^2 + y^2)
+}
+
+# Area-weighted mean helper
+aw_mean <- function(val, w) {
+  i <- is.finite(val)
+  if (!any(i)) return(NA_real_)
+  sum(val[i] * w[i]) / sum(w[i])
 }
 
 # ------------------------------------------------------------------------------
@@ -189,7 +208,7 @@ districts_sf_m <- st_transform(districts_sf_wgs84, EA_CRS)
 
 # ------------------------------------------------------------------------------
 # 4) BUILD GRID CELL POLYGONS FROM PARQUET INDICES
-#    We derive cell edges from center coords (0.25° grid) and build polygons.
+#    We derive cell edges from center coords (0.25° ERA5 grid) and build polygons.
 # ------------------------------------------------------------------------------
 
 # Read any year to get unique (lat_idx_x4, lon_idx_x4) pairs  centers
@@ -321,8 +340,12 @@ weights <- compute_cell_district_weights(cell_sf_m, districts_sf_m)
 # ------------------------------------------------------------------------------
 
 read_one_year_raw <- function(yr) {
-  ydir <- file.path(era5_root, yr)
-  if (!dir.exists(ydir)) return(data.table())
+  ydir <- if (grepl("^s3://", era5_root)) {
+    # build URL-ish paths with paste/sprintf to avoid `//` and backslashes
+    sprintf("%s/%d", era5_root, yr)
+  } else {
+    file.path(era5_root, yr)  # local filesystem is fine with file.path()
+  }
   
   ds <- open_dataset(ydir, format = "parquet",
                      factory_options = list(exclude_invalid_files = TRUE))
@@ -403,12 +426,6 @@ cell_day_stats <- function(dt_hourly) {
   out[]
 }
 
-# Area-weighted mean helper
-aw_mean <- function(val, w) {
-  i <- is.finite(val)
-  if (!any(i)) return(NA_real_)
-  sum(val[i] * w[i]) / sum(w[i])
-}
 
 # ------------------------------------------------------------------------------
 # 8) CELL-DAILY  DISTRICT-DAILY using area weights (m²)
@@ -707,29 +724,34 @@ weekly_weather_features <- function(daily_dt, weeks_dt, cfg = CFG) {
 # ------------------------------------------------------------------------------
 
 # 1) Generate district-daily file (only once per update)
-years <- 2006
-out_daily <- summarize_years_area_weighted(years)
-fwrite(out_daily, here("analysis/sri_lanka/srilanka_district_daily_era5_areawt.csv"))
+jj::timed('start')
+out_daily <- summarize_years_area_weighted(years_all)
+jj::timed('end')
 
-# 2) Weekly features (requires WER week windows)
-names(out_daily) <- gsub("_aw","",names(out_daily))  # if earlier suffixes existed
+names(out_daily)
 
-
-
-lepto <- fread(file.path(paths$work_out, "lep_analysis_panel.csv"))
-               
-               
-weeks_dt <- unique(lepto[, .(district, date_start, date_end)])  # from your WER table
-features_weekly <- weekly_weather_features(out_daily, weeks_dt)
-fwrite(features_weekly, here("analysis/sri_lanka/srilanka_district_weekly_era5_areawt.csv"))
-
-# 3) Join back to health data for modeling
-features_weekly <- fread(here("analysis/sri_lanka/srilanka_district_weekly_era5_areawt.csv"))
-lepto_feat <- features_weekly[lepto, on = .(district, date_start, date_end)]
-# Fit GLM/GLMM with offset(log(poptot)) and chosen features.
+fwrite(out_daily, paths$outputs$era5_weekly_aggregated)
 
 
 
+# 
+# # 2) Weekly features (requires WER week windows)
+# names(out_daily) <- gsub("_aw","",names(out_daily))  # if earlier suffixes existed
+# 
+# 
+# 
+# lepto <- fread(file.path(paths$work_out, "lep_analysis_panel.csv"))
+#                
+#                
+# weeks_dt <- unique(lepto[, .(district, date_start, date_end)])  # from your WER table
+# features_weekly <- weekly_weather_features(out_daily, weeks_dt)
+# fwrite(features_weekly, here("analysis/sri_lanka/srilanka_district_weekly_era5_areawt.csv"))
+# 
+# # 3) Join back to health data for modeling
+# features_weekly <- fread(here("analysis/sri_lanka/srilanka_district_weekly_era5_areawt.csv"))
+# lepto_feat <- features_weekly[lepto, on = .(district, date_start, date_end)]
+# 
+# 
 
 
 
