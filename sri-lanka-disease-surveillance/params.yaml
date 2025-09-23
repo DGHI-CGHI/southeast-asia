@@ -1,0 +1,13 @@
+paths:
+  raw: "data/raw"
+  processed: "data/processed"
+  intermediate: "data/intermediate"      # or 'intermediate'
+  reports: "reports"
+
+data_sources:
+  era5: "data/raw/era5"        # local landing spot (filled by DVC)
+
+run:
+  start_date: "2007-01-01"
+  end_date:   "2024-12-31"
+  adm_level:  "adm2"

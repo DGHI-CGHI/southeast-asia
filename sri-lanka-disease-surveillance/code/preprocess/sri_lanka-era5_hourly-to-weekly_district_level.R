@@ -1,28 +1,28 @@
 ################################################################################
-# CHI ??? Sri Lanka ERA5 ??? District Daily + Weekly Features
+# CHI  Sri Lanka ERA5  District Daily + Weekly Features
 # File: analysis/sri_lanka/era5_to_weekly_features.R
 #
 # Purpose
 #   Convert ERA5 hourly gridded fields to district-level daily aggregates
 #   using area-weighting, then derive epidemiology-ready weekly features
-#   aligned to WER week windows (date_start ??? date_end).
+#   aligned to WER week windows (date_start  date_end).
 #
 # What this script produces
 #   1) District × day (area-weighted) climate table
-#      ??? srilanka_district_daily_era5_areawt.csv
+#       srilanka_district_daily_era5_areawt.csv
 #   2) District × epi-week feature table (lags, rolls, anomalies, etc.)
-#      ??? srilanka_district_weekly_era5_areawt.csv
+#       srilanka_district_weekly_era5_areawt.csv
 #
 # Key steps
 #   . Ingest hourly ERA5 parquet (per year), normalize units, localize timestamps
 #   . Summarize to cell × day (means/mins/maxes; sums for precipitation)
 #   . Overlay grid cells with ADM2 districts (equal-area CRS) to compute
 #     intersection areas and area-weighted district × day stats
-#   . Aggregate district daily ??? district weekly aligned to WER week windows,
+#   . Aggregate district daily  district weekly aligned to WER week windows,
 #     and compute features (wet days, 3-day maxima, EWAP, lags, rolls, anomalies)
 #
 # Inputs (expected layout)
-#   era5_root/???year???/*.parquet  with columns (or equivalents):
+#   era5_root/year/*.parquet  with columns (or equivalents):
 #     - validTime (seconds since epoch, UTC), ssrd (J/m² per hour),
 #     - ta_scaled10_degC, td_scaled10_degC, wbgt_scaled10_degC,
 #     - wind2m_scaled10_ms1 (or wind2m_scaled10_ms),
@@ -60,7 +60,7 @@ suppressPackageStartupMessages({
 # 0) CONFIG
 # ------------------------------------------------------------------------------
 
-source(here("helpers", "helpers.R"))  # expected to provide norm_dist(), etc.
+# source(here("helpers", "helpers.R"))  # expected to provide norm_dist(), etc.
 
 #################
 #################
@@ -93,9 +93,8 @@ paths = c(paths,
 
 
 # Path holding ERA5 parquet folders, one folder per year (e.g., 1980, 1981, .)
-era5_root <- "E:/data/gridded/era5-srilanka/processed"
-
-
+era5_root <- "s3://dghi-chi/data/se-asia/sri-lanka-disease-surveillance/era5/"
+era5_root <- "sri-lanka/disease/surveillance/data/raw/era5"  # use relative path in scripts
 
 # Analysis years (adjust as needed)
 years_all   <- 2006:2024
@@ -124,8 +123,8 @@ VAR_WIND10    <- "wind2m_scaled10_ms1"  # wind (m/s * 10); fallback handled belo
 VAR_MTPR      <- "mtpr"                  # precip rate (assumed mm/day after daily sum here)
 VAR_TP        <- "tp"                    # total precipitation (m); sum to daily
 
-VAR_LATIDX    <- "lat_idx_x4"            # 0.25° grid center index ??? lat = idx/4
-VAR_LONIDX    <- "lon_idx_x4"            # 0.25° grid center index ??? lon = idx/4
+VAR_LATIDX    <- "lat_idx_x4"            # 0.25° grid center index  lat = idx/4
+VAR_LONIDX    <- "lon_idx_x4"            # 0.25° grid center index  lon = idx/4
 
 # ------------------------------------------------------------------------------
 # 2) SMALL HELPERS
@@ -193,7 +192,7 @@ districts_sf_m <- st_transform(districts_sf_wgs84, EA_CRS)
 #    We derive cell edges from center coords (0.25° grid) and build polygons.
 # ------------------------------------------------------------------------------
 
-# Read any year to get unique (lat_idx_x4, lon_idx_x4) pairs ??? centers
+# Read any year to get unique (lat_idx_x4, lon_idx_x4) pairs  centers
 build_latlon_lookup <- function(year_for_coords = NULL) {
   yr <- if (is.null(year_for_coords)) {
     yrs <- list.dirs(era5_root, recursive = FALSE, full.names = FALSE)
@@ -277,8 +276,8 @@ make_cell_polygons <- function(coords_lookup) {
 cell_sf_m <- make_cell_polygons(coords_lookup)
 
 # ------------------------------------------------------------------------------
-# 5) PRECOMPUTE CELL???DISTRICT AREA WEIGHTS (m² intersections)
-#    This is static across years and variables ??? compute once and reuse.
+# 5) PRECOMPUTE CELLDISTRICT AREA WEIGHTS (m² intersections)
+#    This is static across years and variables  compute once and reuse.
 # ------------------------------------------------------------------------------
 
 compute_cell_district_weights <- function(cell_sf_m, districts_sf_m) {
@@ -344,7 +343,7 @@ read_one_year_raw <- function(yr) {
       date      = cast(local_ts, date32()),
       hour      = hour(local_ts),
       
-      # Unscale °C*10 ??? °C; round to 0.1 to remove integer artifacts
+      # Unscale °C*10  °C; round to 0.1 to remove integer artifacts
       ta   = round(cast(!!sym(VAR_TA10),   float64()) / 10, 1),
       td   = round(cast(!!sym(VAR_TD10),   float64()) / 10, 1),
       wbgt = round(cast(!!sym(VAR_WBGT10), float64()) / 10, 1),
@@ -359,7 +358,7 @@ read_one_year_raw <- function(yr) {
       ea   = 0.6108 * exp(17.27 * td / (td + 237.3)),
       vpd  = if_else(es - ea > 0, es - ea, 0.0),
       
-      # ssrd in J/m² per hour ??? MJ/m² per hour
+      # ssrd in J/m² per hour  MJ/m² per hour
       ssrd_MJ = cast(!!sym(VAR_SSRD), float64()) / 1e6
     ) |>
     select(dplyr::all_of(c(VAR_LATIDX, VAR_LONIDX)),
@@ -380,7 +379,7 @@ read_one_year_raw <- function(yr) {
 }
 
 # ------------------------------------------------------------------------------
-# 7) HOURLY ??? DAILY (cell × day): means/mins/maxes; precip sums
+# 7) HOURLY  DAILY (cell × day): means/mins/maxes; precip sums
 # ------------------------------------------------------------------------------
 
 cell_day_stats <- function(dt_hourly) {
@@ -412,7 +411,7 @@ aw_mean <- function(val, w) {
 }
 
 # ------------------------------------------------------------------------------
-# 8) CELL-DAILY ??? DISTRICT-DAILY using area weights (m²)
+# 8) CELL-DAILY  DISTRICT-DAILY using area weights (m²)
 # ------------------------------------------------------------------------------
 
 district_day_from_cell_day <- function(cell_daily, weights) {
@@ -436,7 +435,7 @@ district_day_from_cell_day <- function(cell_daily, weights) {
       lapply(vars_mmm, \(v) suppressWarnings(max(get(paste0(v, "_max")), na.rm = TRUE))),
       paste0(vars_mmm, "_max")
     )
-    # Area-weighted means of daily precipitation sums ??? district daily totals
+    # Area-weighted means of daily precipitation sums  district daily totals
     tp_aw   <- aw_mean(tp_sum,   area_m2)
     mtpr_aw <- aw_mean(mtpr_sum, area_m2)
     
@@ -447,7 +446,7 @@ district_day_from_cell_day <- function(cell_daily, weights) {
 }
 
 # ------------------------------------------------------------------------------
-# 9) DRIVER: loop over years ??? write district-daily CSV
+# 9) DRIVER: loop over years  write district-daily CSV
 # ------------------------------------------------------------------------------
 
 summarize_years_area_weighted <- function(years) {
@@ -539,7 +538,7 @@ CFG <- list(
   EWAP_K       = 4,
   ANOMALY_VARS = c("precip_tp_sum_week","tmax_mean","rh_mean_week"),
   ZSCORE_VARS  = c("precip_tp_sum_week","precip_mtpr_sum_week","tmax_mean","vpd_mean_week"),
-  MIN_DAYS_PER_WEEK = 5 # require ???5/7 days in week to compute metrics
+  MIN_DAYS_PER_WEEK = 5 # require 5/7 days in week to compute metrics
 )
 
 weekly_weather_features <- function(daily_dt, weeks_dt, cfg = CFG) {
@@ -589,7 +588,7 @@ weekly_weather_features <- function(daily_dt, weeks_dt, cfg = CFG) {
     tp   <- tp_sum        # daily precipitation (units consistent with earlier steps)
     mtpr <- mtpr_sum
     
-    # Rolling 3-day maxima within the week (requires ???3 non-NA days)
+    # Rolling 3-day maxima within the week (requires 3 non-NA days)
     max3_tp   <- if (sum(!is.na(tp))   >= 3) max(zoo::rollapplyr(tp,   3, sum, na.rm = TRUE), na.rm = TRUE) else NA_real_
     max3_mtpr <- if (sum(!is.na(mtpr)) >= 3) max(zoo::rollapplyr(mtpr, 3, sum, na.rm = TRUE), na.rm = TRUE) else NA_real_
     
@@ -610,7 +609,7 @@ weekly_weather_features <- function(daily_dt, weeks_dt, cfg = CFG) {
       rh_mean_week           = mean_na(rh),       # %
       vpd_mean_week          = mean_na(vpd),      # kPa
       
-      # Radiation (MJ/m² per day ??? weekly mean)
+      # Radiation (MJ/m² per day  weekly mean)
       ssrd_MJ_mean_week      = mean_na(ssrd),
       
       # Weekly precipitation totals (units follow daily sums)
