@@ -165,11 +165,11 @@ if (interactive()) {
 # --- OPEN SCRIPTS + RENDER README/WELCOME IN VIEWER (robust) ------------------
 .local_open_files <- function() {
   wanted <- c(
-    "code/analysis/sri_lanka_modeling.R",
     "code/preprocess/era5_to_weekly_features.R",
     "code/preprocess/initial_processing.R",
     "code/preprocess/post_processing.R",
-    "code/README.md"
+    "code/analysis/sri_lanka_modeling.R"#,
+    # "code/README.md"
   )
   files <- normalizePath(wanted, winslash = "/", mustWork = FALSE)
   files <- files[file.exists(files)]
