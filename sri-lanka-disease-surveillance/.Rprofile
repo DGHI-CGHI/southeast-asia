@@ -162,7 +162,7 @@ if (interactive()) {
 }
 
 
-
+# --- OPEN SCRIPTS + RENDER README/WELCOME IN VIEWER (robust) ------------------
 .local_open_files <- function() {
   wanted <- c(
     "code/analysis/sri_lanka_modeling.R",
@@ -175,7 +175,7 @@ if (interactive()) {
   files <- files[file.exists(files)]
   if (!length(files)) return(invisible())
   
-  if (requireNamespace("rstudioapi", quietly = TRUE) && rstudioapi::isAvailable()) {
+  if (requireNamespace("rstudioapi", quietly=TRUE) && rstudioapi::isAvailable()) {
     for (fp in files) try(rstudioapi::navigateToFile(fp), silent = TRUE)
     try(rstudioapi::executeCommand("activateConsole"), silent = TRUE)
   } else {
@@ -183,88 +183,60 @@ if (interactive()) {
   }
 }
 
-.local_open_readme_html <- function() {
-  if (!requireNamespace("rstudioapi", quietly = TRUE) || !rstudioapi::isAvailable())
-    return(invisible())
-  
+.local_render_readme <- function() {
   # Prefer WELCOME.qmd/Rmd; else README.md
-  qmd <- "WELCOME.qmd"
-  rmd <- "WELCOME.Rmd"
-  rd  <- "README.md"
-  if (file.exists(qmd) && requireNamespace("quarto", quietly = TRUE)) {
-    out <- try(quarto::quarto_render(qmd, quiet = TRUE), silent = TRUE)
-    if (!inherits(out, "try-error")) return(rstudioapi::viewer(out))
+  if (!requireNamespace("rstudioapi", quietly=TRUE) || !rstudioapi::isAvailable())
+    return(FALSE)
+  
+  if (file.exists("WELCOME.qmd") && requireNamespace("quarto", quietly=TRUE)) {
+    ok <- try(quarto::quarto_render("WELCOME.qmd", quiet = TRUE), silent = TRUE)
+    if (!inherits(ok, "try-error") && file.exists(ok)) { rstudioapi::viewer(ok); return(TRUE) }
   }
-  if (file.exists(rmd) && requireNamespace("rmarkdown", quietly = TRUE)) {
+  if (file.exists("WELCOME.Rmd") && requireNamespace("rmarkdown", quietly=TRUE)) {
     html <- file.path(tempdir(), "WELCOME.html")
-    ok <- try(rmarkdown::render(rmd, output_file = html, quiet = TRUE), silent = TRUE)
-    if (!inherits(ok, "try-error") && file.exists(html)) return(rstudioapi::viewer(html))
+    ok <- try(rmarkdown::render("WELCOME.Rmd", output_file = html, quiet = TRUE), silent = TRUE)
+    if (!inherits(ok, "try-error") && file.exists(html)) { rstudioapi::viewer(html); return(TRUE) }
   }
-  if (file.exists(rd)) {
+  if (file.exists("README.md")) {
     html <- file.path(tempdir(), "README.html")
-    if (requireNamespace("rmarkdown", quietly = TRUE)) {
-      ok <- try(rmarkdown::render(rd, output_file = html, quiet = TRUE), silent = TRUE)
-      if (!inherits(ok, "try-error") && file.exists(html)) return(rstudioapi::viewer(html))
+    if (requireNamespace("rmarkdown", quietly=TRUE)) {
+      ok <- try(rmarkdown::render("README.md", output_file = html, quiet = TRUE), silent = TRUE)
+      if (!inherits(ok, "try-error") && file.exists(html)) { rstudioapi::viewer(html); return(TRUE) }
     }
     if (nzchar(Sys.which("pandoc"))) {
-      cmd <- sprintf('"%s" "%s" -o "%s"', Sys.which("pandoc"), rd, html)
+      cmd <- sprintf('"%s" "%s" -o "%s"', Sys.which("pandoc"), "README.md", html)
       system(cmd)
-      if (file.exists(html)) return(rstudioapi::viewer(html))
+      if (file.exists(html)) { rstudioapi::viewer(html); return(TRUE) }
     }
-    # Fallback: open as plain text if we couldn't render
-    rstudioapi::navigateToFile(rd)
+    # Fallback: open README.md as plain text tab
+    rstudioapi::navigateToFile("README.md"); return(TRUE)
   }
-  invisible()
+  FALSE
 }
 
-# One clean hook. Delay a touch so the Viewer is ready.
-.if_first_session <- function(isNew) {
-  if (isTRUE(getOption("project_docs_opened"))) return(invisible())
+.local_try_open_readme <- function(tries = 6, delay = 0.8) {
+  # Try to render/show README; if it fails (Viewer not ready), retry a few times.
+  ok <- try(.local_render_readme(), silent = TRUE)
+  if (isTRUE(ok)) { options(project_readme_opened = TRUE); return(invisible()) }
+  if (tries <= 1L) return(invisible())
   if (requireNamespace("later", quietly = TRUE)) {
-    later::later(function() {
-      .local_open_files()
-      .local_open_readme_html()
-      options(project_docs_opened = TRUE)
-    }, delay = 0.5)
+    later::later(function() .local_try_open_readme(tries - 1L, delay), delay = delay)
   } else {
-    .local_open_files()
-    .local_open_readme_html()
-    options(project_docs_opened = TRUE)
+    # crude sleep fallback
+    Sys.sleep(delay); .local_try_open_readme(tries - 1L, delay)
   }
 }
 
+# Single hook; defer, then retry if needed.
 if (interactive()) {
-  setHook("rstudio.sessionInit", .if_first_session, action = "append")
-  # Non-RStudio fallback (opens files + README as text)
-  if (Sys.getenv("RSTUDIO") != "1" && !isTRUE(getOption("project_docs_opened"))) {
-    .local_open_files()
-    Sys.sleep(10)
-    .local_open_readme_html()
-    
-    options(project_docs_opened = TRUE)
-  }
+  setHook("rstudio.sessionInit", function(isNew) {
+    if (!isTRUE(getOption("project_docs_opened"))) {
+      # a) open your working scripts
+      .local_open_files()
+      # b) render+open README/WELCOME in Viewer (with retries)
+      .local_try_open_readme(tries = 6, delay = 0.8)
+      options(project_docs_opened = TRUE)
+    }
+  }, action = "replace")
 }
 # -------------------------------------------------------------------------------
-
-
-.local_open_readme_html()
-
-
-.local_open_readme_html()
-
-
-
-.local_open_readme_html()
-
-
-.local_open_readme_html()
-
-
-.local_open_readme_html()
-
-
-.local_open_readme_html()
-
-
-.local_open_readme_html()
-
