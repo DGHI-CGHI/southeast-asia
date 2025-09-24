@@ -194,18 +194,6 @@ if (interactive()) {
   options(project_docs_opened = TRUE)
 }
 
-if (interactive()) {
-  # Run after RStudio finishes initializing the session
-  setHook("rstudio.sessionInit", function(isNewSession) {
-    if (!isTRUE(getOption("project_docs_opened"))) .local_open_files()
-  }, action = "append")
-  
-  # Fallback: if we're NOT in RStudio (or the hook doesn't fire), do it now.
-  if (Sys.getenv("RSTUDIO") != "1" && !isTRUE(getOption("project_docs_opened"))) {
-    .local_open_files()
-  }
-}
-
 .local_open_readme_html <- function() {
   if (!requireNamespace("rstudioapi", quietly=TRUE) || !rstudioapi::isAvailable()) return(invisible())
   rd <- "README.md"
@@ -223,5 +211,18 @@ if (interactive()) {
     rstudioapi::navigateToFile(rd)  # last resort: open as plain text
   }
 }
-.local_open_readme_html()
+
+if (interactive()) {
+  # Run after RStudio finishes initializing the session
+  setHook("rstudio.sessionInit", function(isNewSession) {
+    if (!isTRUE(getOption("project_docs_opened"))) .local_open_files()
+  }, action = "append")
+  
+  # Fallback: if we're NOT in RStudio (or the hook doesn't fire), do it now.
+  if (Sys.getenv("RSTUDIO") != "1" && !isTRUE(getOption("project_docs_opened"))) {
+    .local_open_files()
+    .local_open_readme_html()
+  }
+}
+
 
