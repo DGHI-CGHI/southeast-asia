@@ -1,12 +1,12 @@
 ################################################################################
-# CHI ??? Sri Lanka WER - Post-Processing Pipeline
+# CHI  Sri Lanka WER - Post-Processing Pipeline
 # File: analysis/sri_lanka/post_processing.R
 #
 # Purpose:
 #   Consume outputs from the initial WER scrape/extraction and build an
 #   analysis-ready panel by merging:
 #     . Weekly district disease counts (from initial_processing.R)
-#     . Mid-year population (PDF ??? tidy, or CSV fallback) ??? rates per 100k
+#     . Mid-year population (PDF  tidy, or CSV fallback)  rates per 100k
 #     . Station-based weather aggregated to district × day
 #     . District land-cover proportions (exactextractr over raster)
 #     . ERA5 district-daily aggregates
@@ -71,11 +71,11 @@ setDTthreads(8)
 #   CHI_GITHUB_ROOT="C:/Users/jordan/R_Projects/CHI-Data"
 #   JAVA_HOME="C:/Program Files/Eclipse Adoptium/jdk-17.0.16.8-hotspot"
 #################
-#################  
+#################
 # PDF table extraction (tabulizer stack via rJava)
 # MUST SET JAVA_HOME FIRST before loading library.
 Sys.setenv(JAVA_HOME = Sys.getenv("JAVA_HOME", unset = Sys.getenv("JAVA_HOME")))  # no-op if already set
-Sys.setenv("JAVA_HOME"="C:/Program Files/Eclipse Adoptium/jdk-17.0.16.8-hotspot")
+Sys.setenv("JAVA_HOME" = "C:/Program Files/Eclipse Adoptium/jdk-17.0.16.8-hotspot")
 
 # To install PDF related packages:
 # install.packages("rJava")
@@ -103,7 +103,8 @@ paths <- list(
 # 2) Source inputs that should live in the project repo:
 #    Recommend moving PDFs/CSVs under data/raw or data/raw/external.
 #    For now, keep your current filenames but make them relative.
-paths$midyear_pop <- p(cfg$paths$raw, "Mid-year_population_by_district_and_sex_2024.pdf")
+paths$midyear_pop <- p(cfg$paths$raw,
+                       "Mid-year_population_by_district_and_sex_2024.pdf")
 paths$wx_stations <- p(cfg$paths$raw , "station_data/SriLanka_Weather_Dataset.csv")
 paths$era5_daily  <- p(cfg$paths$raw, "srilanka_district_daily_era5_areawt.csv")
 
@@ -112,11 +113,12 @@ paths$fig_dir <- p(cfg$paths$reports, "figures")
 
 # 4) Additional named outputs (project-relative)
 paths$outputs <- list(
-  era5_weekly_aggregated = p(cfg$path$intermediate, 'srilanka_district_daily_era5_areawt.csv'),
-  pdf_index_csv   = p(cfg$path$intermediate, 
-                      "sri_lanka_WER_index_of_pdfs.csv"),
-  case_counts_txt = p(cfg$path$intermediate, 
-                      "disease_counts_v4.txt")
+  era5_weekly_aggregated = p(
+    cfg$path$intermediate,
+    'srilanka_district_daily_era5_areawt.csv'
+  ),
+  pdf_index_csv   = p(cfg$path$intermediate, "sri_lanka_WER_index_of_pdfs.csv"),
+  case_counts_txt = p(cfg$path$intermediate, "disease_counts_v4.txt")
 )
 
 # 5) ERA5 root **local path** (hydrated by DVC), not s3://
@@ -126,7 +128,8 @@ era5_root <- p(cfg$paths$raw, "era5")
 
 
 # 6) Create any needed directories once (safe if they already exist)
-ensure_dir <- function(...) dir.create(p(...), recursive = TRUE, showWarnings = FALSE)
+ensure_dir <- function(...)
+  dir.create(p(...), recursive = TRUE, showWarnings = FALSE)
 ensure_dir(cfg$paths$intermediate, "temp")
 ensure_dir(cfg$paths$intermediate, "outputs")
 ensure_dir(cfg$paths$reports, "figures")
@@ -146,39 +149,50 @@ lep <- fread(paths$outputs$case_counts_txt)
 
 # Normalize key fields and derive mid-week date (used for daily joins)
 lep[, date_mid := as.IDate(date_start + (as.integer(date_end - date_start) / 2))]
-lep[, `:=`(district = norm_dist(district),
-           date_mid = as.IDate(date_mid),
-           date_end = as.IDate(date_end))]
+lep[, `:=`(
+  district = norm_dist(district),
+  date_mid = as.IDate(date_mid),
+  date_end = as.IDate(date_end)
+)]
 
 ################################################################################
-# 2) POPULATION: PDF ??? TIDY (or CSV fallback) ----------------------------------
+# 2) POPULATION: PDF  TIDY (or CSV fallback) ----------------------------------
 ################################################################################
 # SECTION GOAL: Produce pop_dt with columns [district, year, poptot].
 # Preference order:
-#   (A) CHI_POP_CSV provided  ??? read directly (no Java)
+#   (A) CHI_POP_CSV provided   read directly (no Java)
 #   (B) Else parse from PDF via tabulizer (requires Java stack)
 # NOTE: Requires working rJava/Tabulizer on your machine; handled with tryCatch.
 pop_dt <- NULL
 if (file.exists(paths$midyear_pop)) {
-  tabs <- tryCatch(extract_tables(paths$midyear_pop, method = "lattice",
-                                  guess = TRUE, output = "tibble"),
-                   error = function(e) NULL)
+  tabs <- tryCatch(
+    extract_tables(
+      paths$midyear_pop,
+      method = "lattice",
+      guess = TRUE,
+      output = "tibble"
+    ),
+    error = function(e)
+      NULL
+  )
   if (!is.null(tabs) && length(tabs) >= 1) {
     yrs <- 2014:2023
     pieces <- list()
     for (pg in seq_along(tabs)) {
       tb <- as.data.table(tabs[[pg]])
       yrheads <- names(tb)[names(tb) %like% paste(yrs, collapse = "|")]
-      if (!length(yrheads)) next
+      if (!length(yrheads))
+        next
       # For each detected year column, grab District names + "Total" col under that year
       for (yh in yrheads) {
         district_names <- tb$District[-1]
         col_idx <- which(tb[1] == "Total")[which(names(tb) == yh)]
-        if (!length(col_idx)) next
+        if (!length(col_idx))
+          next
         vals <- tb[[col_idx]][-1]
-        pieces[[length(pieces)+1L]] <- data.table(
+        pieces[[length(pieces) + 1L]] <- data.table(
           year    = as.integer(gsub("\\*", "", yh)),
-          district= district_names,
+          district = district_names,
           poptot  = as.numeric(gsub(",", "", vals)) * 1000
         )
       }
@@ -196,7 +210,13 @@ lep = lep[district %in% pop_dt$district]
 
 # current mid year pop data starts in 2014, so for years in health data before that, simply using 2014 pop for now.
 lep[, year2merge := fifelse(year >= 2014, year, 2014L)]
-lep <- merge(lep, pop_dt, by.x = c("district","year2merge"), by.y = c("district","year"), all.x = TRUE)
+lep <- merge(
+  lep,
+  pop_dt,
+  by.x = c("district", "year2merge"),
+  by.y = c("district", "year"),
+  all.x = TRUE
+)
 
 # -- 2.4 Compute rates per 100k -------------------------------------------------
 lep[, `:=`(
@@ -209,53 +229,77 @@ lep[, year := NULL] # year no longer needed after merge
 
 
 ################################################################################
-# 3) WEATHER: MAP STATIONS ??? DISTRICTS & AGG DAILY -----------------------------
+# 3) WEATHER: MAP STATIONS  DISTRICTS & AGG DAILY -----------------------------
 ################################################################################
 # SECTION GOAL: Assign station observations to districts, then compute
 # areal averages per district × day for selected variables.
 
 wx <- fread(paths$wx_stations)
-stopifnot(all(c("time","latitude","longitude","city") %in% names(wx)))
-if (!inherits(wx$time, "Date")) wx[, time := as.IDate(time)]
+stopifnot(all(c("time", "latitude", "longitude", "city") %in% names(wx)))
+if (!inherits(wx$time, "Date"))
+  wx[, time := as.IDate(time)]
 
 # -- Assign each unique (city, lat, lon) to a district via spatial join --------
 gadm_zip <- "https://geodata.ucdavis.edu/gadm/gadm4.1/shp/gadm41_LKA_shp.zip"
-tdir <- tempfile("lka_gadm41_"); dir.create(tdir)
+tdir <- tempfile("lka_gadm41_")
+dir.create(tdir)
 zipfile <- file.path(tdir, "gadm41_LKA_shp.zip")
-download.file(gadm_zip, destfile = zipfile, mode = "wb", quiet = TRUE)
+download.file(gadm_zip,
+              destfile = zipfile,
+              mode = "wb",
+              quiet = TRUE)
 unzip(zipfile, exdir = tdir)
-adm2_shp <- list.files(tdir, pattern = "^gadm41_LKA_2\\.shp$", full.names = TRUE, recursive = TRUE)
+adm2_shp <- list.files(tdir,
+                       pattern = "^gadm41_LKA_2\\.shp$",
+                       full.names = TRUE,
+                       recursive = TRUE)
 stopifnot(length(adm2_shp) == 1)
 
-adm2 <- st_read(adm2_shp, quiet = TRUE)[, c("GID_2","NAME_1","NAME_2","geometry")]
-names(adm2) <- c("gid2","province","district","geometry")
+adm2 <- st_read(adm2_shp, quiet = TRUE)[, c("GID_2", "NAME_1", "NAME_2", "geometry")]
+names(adm2) <- c("gid2", "province", "district", "geometry")
 adm2$district <- norm_dist(adm2$district)
 adm2 <- st_make_valid(adm2)
 
 stations_lu <- unique(wx[, .(city, latitude, longitude)])
-stations_sf <- st_as_sf(stations_lu, coords = c("longitude","latitude"), crs = 4326, remove = FALSE)
+stations_sf <- st_as_sf(
+  stations_lu,
+  coords = c("longitude", "latitude"),
+  crs = 4326,
+  remove = FALSE
+)
 stations_sf <- st_transform(stations_sf, st_crs(adm2))
 stations_join <- st_join(stations_sf, adm2["district"], left = TRUE)
 city2dist <- as.data.table(stations_join)[, .(city, latitude, longitude, district)]
 
-wx_d <- merge(wx, city2dist, by = c("city","latitude","longitude"), all.x = TRUE)
+wx_d <- merge(wx,
+              city2dist,
+              by = c("city", "latitude", "longitude"),
+              all.x = TRUE)
 wx_d[, district := norm_dist(district)]
 
 # -- District × day means (areal average across stations) ----------------------
-weather_means <- c("temperature_2m_max","temperature_2m_min","temperature_2m_mean",
-                   "apparent_temperature_max","apparent_temperature_min","apparent_temperature_mean",
-                   "shortwave_radiation_sum","precipitation_sum","rain_sum",
-                   "precipitation_hours","windspeed_10m_max","windgusts_10m_max",
-                   "et0_fao_evapotranspiration")
+weather_means <- c(
+  "temperature_2m_max",
+  "temperature_2m_min",
+  "temperature_2m_mean",
+  "apparent_temperature_max",
+  "apparent_temperature_min",
+  "apparent_temperature_mean",
+  "shortwave_radiation_sum",
+  "precipitation_sum",
+  "rain_sum",
+  "precipitation_hours",
+  "windspeed_10m_max",
+  "windgusts_10m_max",
+  "et0_fao_evapotranspiration"
+)
 
-keep_cols <- c("district","time", weather_means)
+keep_cols <- c("district", "time", weather_means)
 wx_keep  <- wx_d[, intersect(names(wx_d), keep_cols), with = FALSE]
-wx_daily <- wx_keep[, lapply(.SD, mean, na.rm = TRUE),
-                    by = .(district, date = time),
-                    .SDcols = setdiff(names(wx_keep), c("district","time"))]
+wx_daily <- wx_keep[, lapply(.SD, mean, na.rm = TRUE), by = .(district, date = time), .SDcols = setdiff(names(wx_keep), c("district", "time"))]
 
 ###############################################################################
-# 4) LAND COVER ??? Download .RAR ??? Extract ??? Raster ------------------------------
+# 4) LAND COVER  Download .RAR  Extract  Raster ------------------------------
 # GOAL:
 #   . Download Sri Lanka land-cover archive (.rar) from NODA
 #   . Extract into analysis/sri_lanka/SriLanka_Landcover_2018/
@@ -266,21 +310,32 @@ wx_daily <- wx_keep[, lapply(.SD, mean, na.rm = TRUE),
 #       - Windows: install 7-Zip (https://www.7-zip.org/)
 #       - macOS:   brew install p7zip
 #       - Ubuntu:  sudo apt-get install p7zip-full
+#
+# # Landcover citation.
+# ZHONG Bo, HU Longfei, WU Junjun, YANG Aixia. 30 m Land Cover Dataset of Sri Lanka (2018)[J/DB/OL].
+# Digital Journal of Global Change Data Repository, 2020. https://doi.org/10.3974/geodb.2020.09.06.V1.
 ###############################################################################
-# 
-
-
-landcover_data_url = 'https://www.noda.ac.cn/en/knowledgehub/downloadAttachment?id=64257e8a29d1210627d613d3&type=DATASET'
-landcover_file = file.path(cfg$paths$raw, "SriLanka_Landcover_2018.rar")
-download.file(landcover_data_url, landcover_file)
-# if download fails, or wanting to skip, use existing rar file in /data 
-# 
-# # defined in /code/helpers/helpers.R
-# extract_rar(landcover_file, 'test')
+lc_dir = file.path(cfg$paths$raw, "landcover")
+landcover_file = file.path(lc_dir, "SriLanka_Landcover_2018")
+# lc_dir = gsub("\\.rar", "", landcover_file)
+if (!file.exists(landcover_file)) {
+  # download from first URL below is not always succesful, but can try if second URL doesn't work.
+  # landcover_data_url = 'https://www.noda.ac.cn/en/knowledgehub/downloadAttachmentid?=64257e8a29d1210627d613d3&type=DATASET'
+  landcover_data_url = 'https://www.geodoi.ac.cn/weben/down.aspx?fileID=5329'
+  options(timeout = 180) # increase timeout for download since connection to website is slow.
+  download.file(
+    landcover_data_url, landcover_file,
+    method = "curl",
+    extra = "-L -A 'Mozilla/5.0'"
+  )
+  extract_rar(landcover_file, lc_dir)
+}
 
 # Point terra to the extracted .tif (adjust name if different inside the RAR)
-tif_file <- list.files(lc_dir, pattern = "\\.tif(f)?$", full.names = TRUE, recursive = TRUE)[1]
-if (is.na(tif_file)) stop("No .tif found after extraction in: ", lc_dir)
+tif_file <- paste0(landcover_file, ".tif")
+
+if (is.na(tif_file))
+  stop("No .tif found after extraction in: ", lc_dir)
 
 r <- rast(tif_file)
 
@@ -288,28 +343,44 @@ r <- rast(tif_file)
 adm2_diss <- adm2 |>
   dplyr::select(province, geometry) |>
   dplyr::group_by(province) |>
-  dplyr::summarise(geometry = st_union(geometry), .groups = "drop")|>
+  dplyr::summarise(geometry = st_union(geometry), .groups = "drop") |>
   st_transform(crs(r))
 
-names(adm2_diss) <- c("district","geometry")
+names(adm2_diss) <- c("district", "geometry")
 
 # Legend mapping
 class_map <- data.table(
-  code  = c(10,20,30,40,50,60,70,80,90,255),
-  label = c("Water","BuiltUp","Cropland","Forest","Shrub","Grass","Bare","Wetland","Paddy","NoData")
+  code  = c(10, 20, 30, 40, 50, 60, 70, 80, 90, 255),
+  label = c(
+    "Water",
+    "BuiltUp",
+    "Cropland",
+    "Forest",
+    "Shrub",
+    "Grass",
+    "Bare",
+    "Wetland",
+    "Paddy",
+    "NoData"
+  )
 )
 
-# Weighted frequency ??? proportions within polygon
+# Weighted frequency  proportions within polygon
 freq_fun <- function(values, coverage_fraction) {
   dt <- data.table(code = values, w = coverage_fraction)[!is.na(code)]
-  if (!nrow(dt)) return(data.frame(code = integer(), prop = numeric()))
+  if (!nrow(dt))
+    return(data.frame(code = integer(), prop = numeric()))
   dt <- dt[, .(w = sum(w, na.rm = TRUE)), by = code][, prop := w / sum(w)]
   as.data.frame(dt[, .(code, prop)])
 }
 
-lc_list <- exact_extract(r, adm2_diss,
-                         fun = function(values, coverage_fraction) list(freq_fun(values, coverage_fraction)),
-                         progress = TRUE)
+lc_list <- exact_extract(
+  r,
+  adm2_diss,
+  fun = function(values, coverage_fraction)
+    list(freq_fun(values, coverage_fraction)),
+  progress = TRUE
+)
 
 lc_dt <- rbindlist(lc_list, idcol = "idx")
 lc_dt[, district := adm2_diss$district[idx]][, idx := NULL]
@@ -320,7 +391,8 @@ lc_wide <- dcast(lc_dt, district ~ label, value.var = "prop", fill = 0)
 # Re-normalize after dropping NoData to ensure rows sum ~1
 prop_cols <- setdiff(names(lc_wide), "district")
 row_sums <- lc_wide[, rowSums(.SD), .SDcols = prop_cols]
-lc_wide[, (prop_cols) := lapply(.SD, function(z) ifelse(row_sums > 0, z / row_sums, 0)), .SDcols = prop_cols]
+lc_wide[, (prop_cols) := lapply(.SD, function(z)
+  ifelse(row_sums > 0, z / row_sums, 0)), .SDcols = prop_cols]
 
 
 ################################################################################
@@ -331,7 +403,7 @@ lc_wide[, (prop_cols) := lapply(.SD, function(z) ifelse(row_sums > 0, z / row_su
 
 # -- 5.1 ERA5 input -------------------------------------------------------------
 era5 <- fread(paths$era5_daily)
-stopifnot(all(c("date","district") %in% names(era5)))
+stopifnot(all(c("date", "district") %in% names(era5)))
 era5[, district := norm_dist(district)]
 era5[, date := as.IDate(date)]
 
@@ -347,16 +419,24 @@ lep <- merge(lep, lc_wide, by = "district", all.x = TRUE)
 # Recompute date_mid defensively (ensures correct type after merges)
 lep[, date_mid := as.IDate(date_start + (as.integer(date_end - date_start) / 2))]
 
-lep <- merge(lep, era5, by.x = c("district","date_mid"), by.y = c("district","date"), all.x = TRUE)
+lep <- merge(
+  lep,
+  era5,
+  by.x = c("district", "date_mid"),
+  by.y = c("district", "date"),
+  all.x = TRUE
+)
 
 lep = lep[year(date_start) <= 2024] # climate data persists through 2024 as of now.
 
 # -- 5.4 Persist final analysis dataset ----------------------------------------
 fwrite(lep, file.path(paths$work_out, "lep_analysis_panel.csv"))
-message("Saved analysis panel: ", normalizePath(file.path(paths$work_out, "lep_analysis_panel.csv"), winslash = "/"))
+message("Saved analysis panel: ",
+        normalizePath(
+          file.path(paths$work_out, "lep_analysis_panel.csv"),
+          winslash = "/"
+        ))
 
 
 # End core workflow.
 ################################################################################
-
-
