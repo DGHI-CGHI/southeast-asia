@@ -206,6 +206,22 @@ if (interactive()) {
   }
 }
 
-
+.local_open_readme_html <- function() {
+  if (!requireNamespace("rstudioapi", quietly=TRUE) || !rstudioapi::isAvailable()) return(invisible())
+  rd <- "README.md"
+  if (!file.exists(rd)) return(invisible())
+  html <- file.path(tempdir(), "README.html")
+  # use rmarkdown if present; otherwise quick pandoc call
+  if (requireNamespace("rmarkdown", quietly=TRUE)) {
+    ok <- try(rmarkdown::render(rd, output_file = html, quiet = TRUE), silent = TRUE)
+    if (!inherits(ok, "try-error") && file.exists(html)) rstudioapi::viewer(html)
+  } else if (nzchar(Sys.which("pandoc"))) {
+    cmd <- sprintf('"%s" "%s" -o "%s"', Sys.which("pandoc"), rd, html)
+    system(cmd)
+    if (file.exists(html)) rstudioapi::viewer(html)
+  } else {
+    rstudioapi::navigateToFile(rd)  # last resort: open as plain text
+  }
+}
 
 
