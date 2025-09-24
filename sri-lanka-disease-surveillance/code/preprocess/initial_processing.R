@@ -442,45 +442,127 @@ extract_all_diseases_by_position <- function(
   
   out[]
 }
+# 
+# #  2.2 Batch extractor over indexed PDFs -------------------------------------
+# # Strategy:
+# #   . If index row contains a URL, download to tempfile; else use local path
+# #   . Extract tables; attach normalized district names + WER week dates
+# allresults <- vector("list", nrow(idx))
+# for (i in seq_len(nrow(idx))) {
+#   cur <- idx[i]
+#   file <- cur$file
+#   if (grepl("^https://", cur$url, ignore.case = TRUE)) {
+#     tf <- tempfile(fileext = ".pdf")
+#     ok <- try(utils::download.file(cur$url, tf, mode = "wb", quiet = TRUE), silent = TRUE)
+#     if (inherits(ok, "try-error")) { allresults[[i]] <- data.table(); next }
+#     file <- tf
+#   }
+#   
+#   allresults[[i]] <- data.table()
+#   
+#   # Extract and attach week dates
+#   res <- extract_all_diseases_by_position(file, debug = FALSE)
+#   if (!is.null(res) && nrow(res)) {
+#     res[, `:=`(
+#       district   = norm_dist(district),
+#       date_start = cur$date_start,
+#       date_end   = cur$date_end
+#     )]
+#     
+#     res = res[!is.na(district)]
+# 
+#     res$file = cur$file
+#     res$url = cur$url
+#     
+#     if (max(nchar(res$district)) > 18) stofile.path()
+#         
+#     
+#     allresults[[i]] <- res
+#   }
+#   if (i %% 25 == 0) message(".processed ", i, " PDFs")
+# }
 
-#  2.2 Batch extractor over indexed PDFs -------------------------------------
-# Strategy:
-#   . If index row contains a URL, download to tempfile; else use local path
-#   . Extract tables; attach normalized district names + WER week dates
-allresults <- vector("list", nrow(idx))
-for (i in seq_len(nrow(idx))) {
-  cur <- idx[i]
-  file <- cur$file
-  if (grepl("^https://", cur$url, ignore.case = TRUE)) {
-    tf <- tempfile(fileext = ".pdf")
-    ok <- try(utils::download.file(cur$url, tf, mode = "wb", quiet = TRUE), silent = TRUE)
-    if (inherits(ok, "try-error")) { allresults[[i]] <- data.table(); next }
-    file <- tf
-  }
+
+# Summary: Process all PDFs in parallel (one PDF per worker).
+library(data.table)
+library(future)
+library(future.apply)
+library(progressr)
+
+# Set this once, BEFORE creating workers (Java mem etc., if needed)
+# options(java.parameters = "-Xmx2g")
+# options(future.globals.maxSize = 2 * 1024^3)  # raise if big objects
+
+# Windows-safe pool of R sessions
+plan(multisession, workers = 8)
+
+
+# idx = idx[1:50]
+jj::timed('start')
+with_progress({
+  p <- progressor(steps = nrow(idx))
   
-  allresults[[i]] <- data.table()
-  
-  # Extract and attach week dates
-  res <- extract_all_diseases_by_position(file, debug = FALSE)
-  if (!is.null(res) && nrow(res)) {
+  allresults <- future_lapply(seq_len(nrow(idx)), function(i) {
+    # Load packages IN WORKER
+    library(data.table)
+    Sys.setenv("JAVA_HOME"="C:/Program Files/Eclipse Adoptium/jdk-17.0.16.8-hotspot")
+    library(tabulapdf)
+    
+    cur <- idx[i]              # 1-row data.table; use $ accessors below
+    file <- cur$file
+    tf   <- NULL
+    
+    # Clean up temporary file on exit
+    on.exit({ if (!is.null(tf) && file.exists(tf)) unlink(tf) }, add = TRUE)
+    
+    # Robust download if URL provided
+    if (grepl("^https?://", cur$url, ignore.case = TRUE)) {
+      tf <- tempfile(fileext = ".pdf")
+      ok <- FALSE
+      for (try_i in 1:3) {
+        z <- try(utils::download.file(cur$url, tf, mode = "wb", quiet = TRUE),
+                 silent = TRUE)
+        if (!inherits(z, "try-error")) { ok <- TRUE; break }
+        Sys.sleep(1 + try_i) # simple backoff
+      }
+      if (!ok) { p(); return(data.table()) }
+      file <- tf
+    }
+    
+    # Do the extraction (your function)
+    res <- try(extract_all_diseases_by_position(file, debug = FALSE),
+               silent = TRUE)
+    if (inherits(res, "try-error") || is.null(res) || !nrow(res)) {
+      p(); return(data.table())
+    }
+    
+    # Attach metadata + normalize district
     res[, `:=`(
       district   = norm_dist(district),
       date_start = cur$date_start,
-      date_end   = cur$date_end
+      date_end   = cur$date_end,
+      file       = cur$file,
+      url        = cur$url
     )]
     
-    res = res[!is.na(district)]
+    res <- res[!is.na(district)]
+    
+    # p()
+    res
+  }, future.seed = TRUE)
+  
+  # Combine
+  allresults <- rbindlist(allresults, use.names = TRUE, fill = TRUE)
+  assign("allresults", allresults, envir = .GlobalEnv)
+})
+jj::timed('end')
 
-    res$file = cur$file
-    res$url = cur$url
-    
-    if (max(nchar(res$district)) > 18) stofile.path()
-        
-    
-    allresults[[i]] <- res
-  }
-  if (i %% 25 == 0) message(".processed ", i, " PDFs")
-}
+# Always return to sequential when done
+plan(sequential)
+
+
+
+
 
 #  2.3 Post-process + persist for downstream scripts -------------------------
 lepto_dt <- allresults # rbindlist(allresults, fill = TRUE)
