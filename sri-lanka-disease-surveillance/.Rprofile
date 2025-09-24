@@ -223,5 +223,5 @@ if (interactive()) {
     rstudioapi::navigateToFile(rd)  # last resort: open as plain text
   }
 }
-
+.local_open_readme_html()
 
