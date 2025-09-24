@@ -1,17 +1,3 @@
-# Sri Lanka Disease Surveillance ▸ Climate–Health Pipeline
-
-## Overview
-
-This repository creates an **analysis-ready panel** linking Sri Lanka’s **Weekly Epidemiological Reports (WER)** to climate, population, and land cover features. It supports DGHI CHI observatory analyses of leptospirosis, dengue, and other notifiable diseases.
-
-The pipeline includes three core stages:
-
-1. **Initial processing** — Crawl and parse WER PDFs into district-week case counts.
-2. **Post-processing** — Merge disease counts with population, station weather, land cover, and ERA5 daily aggregates.
-3. **ERA5 features** — Generate daily and weekly district-level climate covariates with lags, rolling windows, anomalies, and derived metrics.
-
-Outputs are formatted for direct use in GAMs, GBMs, and other modeling frameworks.
-
 ---
 
 # Sri Lanka Disease Surveillance ▸ Climate–Health Pipeline
