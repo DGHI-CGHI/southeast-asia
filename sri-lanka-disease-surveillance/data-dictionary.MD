@@ -1,6 +1,6 @@
 ---
 
-# Data dictionary for `model_df`
+# Data dictionary
 
 ## 1) Identifiers & time axes
 
