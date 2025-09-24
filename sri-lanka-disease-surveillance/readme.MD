@@ -1,125 +1,140 @@
+---
+
 # Sri Lanka Disease Surveillance ▸ Climate–Health Pipeline
 
-## Overview
-
-This repository creates an **analysis-ready panel** linking Sri Lanka’s **Weekly Epidemiological Reports (WER)** to climate, population, and land cover features. It supports DGHI CHI observatory analyses of leptospirosis, dengue, and other notifiable diseases.
-
-The pipeline includes three core stages:
-
-1. **Initial processing** — Crawl and parse WER PDFs into district-week case counts.
-2. **Post-processing** — Merge disease counts with population, station weather, land cover, and ERA5 daily aggregates.
-3. **ERA5 features** — Generate daily and weekly district-level climate covariates with lags, rolling windows, anomalies, and derived metrics.
-
-Outputs are formatted for direct use in GAMs, GBMs, and other modeling frameworks.
+Link Sri Lanka’s **Weekly Epidemiological Reports (WER)** to **population**, **land cover**, and **ERA5** climate features to support modeling (e.g., leptospirosis, dengue). Outputs are analysis-ready for GAMs and other frameworks.
 
 ---
 
-## Key scripts
+## TL;DR — Get started fast
 
-* `code/preprocess/initial_processing.R`
+> If you just want to explore **final disease counts linked to ERA5** and try models, you only need the *modeling script* below.
 
-  * Crawls WER site, indexes PDFs, and extracts weekly district disease counts.
-  * Produces:
+### 1) Clone the repo
 
-    * `data/intermediate/sri_lanka_WER_index_of_pdfs.csv`
-    * `data/intermediate/disease_counts.txt`
+```bash
+# pick any folder you like
+git clone https://github.com/DGHI-CHI/southeast-asia/
+cd southeast-asia/sri-lanka-disease-surveillance
+```
 
-* `code/preprocess/post_processing.R`
+### 2) Open the RStudio project
 
-  * Consumes WER outputs and joins:
+Open:  
+```bash
+southeast-asia/sri-lanka-disease-surveillance/sri-lanka-disease-surveillance.Rproj
+```
+(*Opening the project sets the working directory and plays nicely with `.Rprofile`.)
 
-    * Mid-year population (from PDF or CSV fallback)
-    * Station weather mapped to districts
-    * Land cover proportions (2018 raster)
-    * ERA5 district-daily aggregates
-  * Produces:
+> The modeling script reads the analysis panel at
+> `file.path(cfg$paths$intermediate, "sri_lanka-disease-landcover-climate-2015_2024.csv")`.
 
-    * `data/intermediate/lep_analysis_panel.csv`
-    * Figures under `reports/figures/`
+### 4) Install R packages (first run)
 
-* `code/preprocess/era5_to_weekly_features.R`
+```r
+install.packages(c(
+  "data.table","lubridate","stringr","mgcv",
+  "PRROC","pROC"
+))
+```
 
-  * Converts ERA5 hourly Parquet (S3 or local DVC cache) → daily district means/extremes.
-  * Builds epidemiology-ready **weekly covariates** aligned to WER weeks.
-  * Produces:
+> (If you plan to **parse PDFs** or **rebuild** upstream data, you’ll also need:
+> `tabulapdf`, `tabulizerjars`, `rJava`, `arrow`, `fixest`, `glmmTMB`, `ranger`, `glmnet`.)
 
-    * `data/processed/srilanka_district_daily_era5_areawt.csv`
-    * `data/processed/srilanka_district_weekly_era5_areawt.csv`
+### 5) Open the modeling script
 
----
+Open **`code/analysis/sri_lanka_modeling.R`** and run it.
+This script:
 
-## Data inputs
+* Loads the **analysis-ready weekly panel** (WER + pop + land cover + **ERA5 weekly** features),
+* Auto-discovers ERA5 columns already in the panel (no recomputation here),
+* Builds a compact **GAM/BAM** with cyclic seasonality and optional district RE,
+* Prints **hold-out metrics** and the exact ERA5 variables used.
 
-* `data/raw/Mid-year_population_by_district_and_sex_2024.pdf`
-* `data/raw/population_by_district_in_census_years.csv`
-* `data/raw/station_data/SriLanka_Weather_Dataset.csv`
-* `data/raw/landcover/SriLanka_Landcover_2018.rar` → contains GeoTIFF
-* ERA5 hourly Parquet files:
-
-  * `s3://dghi-chi/data/se-asia/sri-lanka-disease-surveillance/era5/{year}/*.parquet`
-
----
-
-## Typical outputs
-
-* **Case counts**
-
-  * `data/intermediate/disease_counts.txt`
-  * `data/intermediate/sri_lanka_WER_index_of_pdfs.csv`
-
-* **Merged analysis panel**
-
-  * `data/intermediate/lep_analysis_panel.csv`
-
-* **ERA5 features**
-
-  * `data/processed/srilanka_district_daily_era5_areawt.csv`
-  * `data/processed/srilanka_district_weekly_era5_areawt.csv`
-
-* **Figures** (examples in `reports/figures/`):
-
-  * National trend (`P1_national_trend.png`)
-  * Top 15 districts (`P2_top15_latest_week.png`)
-  * Seasonality (`P4_seasonality_boxplots.png`)
+> Tip: edit the `smooth_vars` list near the bottom to try different ERA5 drivers.
 
 ---
 
-## Repository structure
+## Full pipeline (if you want to rebuild inputs)
+
+The project has three stages. You only need these if you’re **regenerating** the panel CSV.
+
+1. **Initial processing** – parse WER PDFs → district×week case counts
+   `code/preprocess/initial_processing.R`
+   Produces `data/intermediate/sri_lanka_WER_index_of_pdfs.csv` and a weekly disease table.
+
+2. **ERA5 features** – build **weekly district-level ERA5** covariates
+   `code/preprocess/era5_to_weekly_features.R`
+   Produces `data/processed/srilanka_district_weekly_era5_areawt.csv`
+
+3. **Post-processing** – merge disease + population + land cover + **ERA5 weekly** → panel
+   `code/preprocess/post_processing.R`
+   Produces **`data/intermediate/sri_lanka-disease-landcover-climate-2015_2024.csv`** (consumed by the modeling script).
+
+> For quick exploration, you can skip 1–2 and just use the **ready panel** if it already exists in `data/intermediate/`.
+
+---
+
+## Expected inputs & outputs
+
+### Inputs (examples)
+
+* `data/raw/Mid-year_population_by_district_and_sex_2024.pdf` (or CSV equivalent)
+* `data/raw/landcover/…` (2018 land-cover raster packaged as RAR/GeoTIFF)
+* ERA5 (hourly/daily) → aggregated to weekly in step 2
+
+### Core output for modeling
+
+* **`data/intermediate/sri_lanka-disease-landcover-climate-2015_2024.csv`**
+  Columns: `district`, `date`/`date_mid`, `week`, `year`, `poptot`, **ERA5 weekly features** (and any precomputed lags/rolls/anoms/z), optional land-cover proportions, and disease counts/rates.
+
+---
+
+## Repo structure (short)
 
 ```
 sri-lanka-disease-surveillance/
 ├─ code/
 │  ├─ preprocess/
-│  │  ├─ initial_processing.R
-│  │  ├─ post_processing.R
-│  │  └─ era5_to_weekly_features.R
+│  │  ├─ initial_processing.R          # WER → weekly district counts
+│  │  ├─ era5_to_weekly_features.R     # ERA5 → weekly district features
+│  │  └─ post_processing.R             # merge → final analysis panel
 │  ├─ analysis/
-│  │  ├─ gams_and_gbms.R
-│  │  ├─ gams_bulk.R
-│  │  ├─ initial_viz.R
-│  │  └─ sri_lanka_modeling.R
+│  │  └─ sri_lanka_modeling.R          # ERA5-only modeling harness (GAM/BAM)
 │  └─ helpers/
-│     ├─ helpers.R
-│     └─ plot_helpers.R
 ├─ data/
-│  ├─ raw/ … population, stations, landcover, ERA5
-│  ├─ intermediate/ … extracted PDFs + merged panels
-│  └─ processed/ … final daily/weekly ERA5 features
+│  ├─ raw/           # population, land cover, ERA5, etc.
+│  ├─ intermediate/  # parsed WER + merged panel (modeling reads from here)
+│  └─ processed/     # ERA5 daily/weekly features
 ├─ reports/
-│  ├─ figures/
-│  └─ tables/
-├─ shared/helpers.R
-├─ params.yaml
 └─ sri-lanka-disease-surveillance.Rproj
 ```
 
 ---
 
-## Notes
+## Troubleshooting
 
-* **PDF parsing is slow** (>20–30 minutes). For exploratory work, skip `initial_processing.R` and start at `post_processing.R`.
-* **ERA5 files are large.** Use Apache Arrow/DVC to pull subsets locally when possible.
-* **Java is only needed** if you parse population tables directly from the PDF. Otherwise, supply a CSV.
-* **Land cover raster** requires 7-Zip / p7zip to extract `.rar`.
+* **Modeling script can’t find the panel CSV**
+  Make sure your `.Rprofile` defines `cfg$paths$intermediate` **and** the file
+  `sri_lanka-disease-landcover-climate-2015_2024.csv` exists there.
+
+* **SLF4J / Java warnings** while parsing PDFs
+  Benign. If `tabulapdf/tabulizerjars` need Java on Windows, set (replace path):
+
+  ```r
+  Sys.setenv(JAVA_HOME = "C:/Program Files/Eclipse Adoptium/jdk-17.x.x-hotspot")
+  ```
+
+* **Week 53**
+  We coerce ISO week 53 → 52 so cyclic splines close the year.
+
+* **Large files (ERA5)**
+  Prefer running the modeling script with the prebuilt panel. Rebuilding ERA5 may require Arrow/DVC and disk space.
+
+---
+
+## License / attribution
+
+Add your preferred license here and any data source acknowledgements (Epidemiology Unit, Dept. of Meteorology, ECMWF ERA5, etc.).
 
 ---
