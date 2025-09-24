@@ -165,63 +165,83 @@ if (interactive()) {
 
 .local_open_files <- function() {
   wanted <- c(
-    
     "code/analysis/sri_lanka_modeling.R",
     "code/preprocess/era5_to_weekly_features.R",
-    "code/preprocess/initial_processing.R",  # preferred location
+    "code/preprocess/initial_processing.R",
     "code/preprocess/post_processing.R",
-    "code/initial_processing.R"              # fallback if it's here
+    "code/README.md"
   )
-  
   files <- normalizePath(wanted, winslash = "/", mustWork = FALSE)
   files <- files[file.exists(files)]
-  if (!length(files)) {
-    message("Auto-open: no target files found (skipping).")
-    return(invisible())
-  }
+  if (!length(files)) return(invisible())
   
-  # Prefer RStudio API when available, else use file.edit()
   if (requireNamespace("rstudioapi", quietly = TRUE) && rstudioapi::isAvailable()) {
-    message("Auto-open via rstudioapi: ", paste(basename(files), collapse = ", "))
     for (fp in files) try(rstudioapi::navigateToFile(fp), silent = TRUE)
     try(rstudioapi::executeCommand("activateConsole"), silent = TRUE)
   } else {
-    message("Auto-open via file.edit(): ", paste(basename(files), collapse = ", "))
     for (fp in files) try(file.edit(fp), silent = TRUE)
   }
-  
-  # Don't re-open repeatedly in this session
-  options(project_docs_opened = TRUE)
 }
 
 .local_open_readme_html <- function() {
-  if (!requireNamespace("rstudioapi", quietly=TRUE) || !rstudioapi::isAvailable()) return(invisible())
-  rd <- "README.md"
-  if (!file.exists(rd)) return(invisible())
-  html <- file.path(tempdir(), "README.html")
-  # use rmarkdown if present; otherwise quick pandoc call
-  if (requireNamespace("rmarkdown", quietly=TRUE)) {
-    ok <- try(rmarkdown::render(rd, output_file = html, quiet = TRUE), silent = TRUE)
-    if (!inherits(ok, "try-error") && file.exists(html)) rstudioapi::viewer(html)
-  } else if (nzchar(Sys.which("pandoc"))) {
-    cmd <- sprintf('"%s" "%s" -o "%s"', Sys.which("pandoc"), rd, html)
-    system(cmd)
-    if (file.exists(html)) rstudioapi::viewer(html)
+  if (!requireNamespace("rstudioapi", quietly = TRUE) || !rstudioapi::isAvailable())
+    return(invisible())
+  
+  # Prefer WELCOME.qmd/Rmd; else README.md
+  qmd <- "WELCOME.qmd"
+  rmd <- "WELCOME.Rmd"
+  rd  <- "README.md"
+  if (file.exists(qmd) && requireNamespace("quarto", quietly = TRUE)) {
+    out <- try(quarto::quarto_render(qmd, quiet = TRUE), silent = TRUE)
+    if (!inherits(out, "try-error")) return(rstudioapi::viewer(out))
+  }
+  if (file.exists(rmd) && requireNamespace("rmarkdown", quietly = TRUE)) {
+    html <- file.path(tempdir(), "WELCOME.html")
+    ok <- try(rmarkdown::render(rmd, output_file = html, quiet = TRUE), silent = TRUE)
+    if (!inherits(ok, "try-error") && file.exists(html)) return(rstudioapi::viewer(html))
+  }
+  if (file.exists(rd)) {
+    html <- file.path(tempdir(), "README.html")
+    if (requireNamespace("rmarkdown", quietly = TRUE)) {
+      ok <- try(rmarkdown::render(rd, output_file = html, quiet = TRUE), silent = TRUE)
+      if (!inherits(ok, "try-error") && file.exists(html)) return(rstudioapi::viewer(html))
+    }
+    if (nzchar(Sys.which("pandoc"))) {
+      cmd <- sprintf('"%s" "%s" -o "%s"', Sys.which("pandoc"), rd, html)
+      system(cmd)
+      if (file.exists(html)) return(rstudioapi::viewer(html))
+    }
+    # Fallback: open as plain text if we couldn't render
+    rstudioapi::navigateToFile(rd)
+  }
+  invisible()
+}
+
+# One clean hook. Delay a touch so the Viewer is ready.
+.if_first_session <- function(isNew) {
+  if (isTRUE(getOption("project_docs_opened"))) return(invisible())
+  if (requireNamespace("later", quietly = TRUE)) {
+    later::later(function() {
+      .local_open_files()
+      .local_open_readme_html()
+      options(project_docs_opened = TRUE)
+    }, delay = 0.5)
   } else {
-    rstudioapi::navigateToFile(rd)  # last resort: open as plain text
+    .local_open_files()
+    .local_open_readme_html()
+    options(project_docs_opened = TRUE)
   }
 }
+
 if (interactive()) {
-  # Run after RStudio finishes initializing the session
-  setHook("rstudio.sessionInit", function(isNewSession) {
-    if (!isTRUE(getOption("project_docs_opened"))) .local_open_files()
-  }, action = "append")
-  
-  # Fallback: if we're NOT in RStudio (or the hook doesn't fire), do it now.
+  setHook("rstudio.sessionInit", .if_first_session, action = "append")
+  # Non-RStudio fallback (opens files + README as text)
   if (Sys.getenv("RSTUDIO") != "1" && !isTRUE(getOption("project_docs_opened"))) {
     .local_open_files()
     .local_open_readme_html()
+    options(project_docs_opened = TRUE)
   }
 }
+# -------------------------------------------------------------------------------
 
 
