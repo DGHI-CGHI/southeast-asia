@@ -1,108 +1,156 @@
-# README — Sri Lanka WER ▸ Climate–Health Pipeline
+# Sri Lanka Disease Surveillance ▸ Climate–Health Pipeline
 
 ## Overview
 
-This repo builds an analysis-ready dataset linking Sri Lanka’s Weekly Epidemiological Reports (WER) to gridded climate covariates. It:
+This repository builds an analysis-ready dataset linking Sri Lanka’s **Weekly Epidemiological Reports (WER)** to **climate, land cover, and demographic covariates**. It is part of the DGHI Climate & Health Initiative’s Southeast Asia observatory work.
 
-1. Indexes and parses WER PDFs to extract district-level weekly cases.
-2. Joins mid-year population to compute per-capita rates.
-3. Maps daily weather station data and ERA5 reanalysis to districts.
-4. Adds land cover proportions by district.
-5. Produces both **daily** and **weekly** climate features aligned to epidemiological weeks for modeling.
+The pipeline:
 
-> If you only want to explore/plot the prepared data, you can start directly at `post_processing.R` after cloning.
+1. **Indexes and parses WER PDFs** to extract district-level weekly cases.
+2. **Joins mid-year population estimates** and census data to compute per-capita rates.
+3. **Processes station and ERA5 reanalysis data** into district-level daily and weekly features.
+4. **Adds land cover proportions** to support ecological/epidemiological modeling.
+5. **Outputs integrated health + climate panels** for downstream analysis (GAMs, GBMs, etc.).
 
-## Quick start
-
-### Prereqs
-
-* R ≥ 4.3 with packages: `data.table`, `stringr`, `lubridate`, `rvest`, `xml2`, `pdftools`, `sf`, `terra`, `exactextractr`, `arrow`, `ggplot2`, `scales`, `ragg`.
-* For optional PDF table extraction from the population PDF: `tabulapdf` + `tabulizerjars` (requires Java + `rJava`).
-* GDAL/GEOS/PROJ available for `sf/terra` (on macOS: `brew install gdal`).
-
-### Environment variables (recommended)
-
-Add to `~/.Renviron` (or set in the session):
-
-```
-CHI_LOCAL_WORK="C:/Users/<you>/Desktop/srilanka"
-CHI_GITHUB_ROOT="C:/Users/<you>/R_Projects/CHI-Data"
-JAVA_HOME="C:/Program Files/Eclipse Adoptium/jdk-17.0.16.8-hotspot"  # if using tabulizer
-```
-
-### Run the pipeline
-
-* Full ingest → extract → enrich:
-
-  1. `analysis/sri_lanka/initial_processing.R`
-
-     * Crawls WER site, indexes PDFs, extracts weekly district counts, saves:
-
-       * `analysis/sri_lanka/outputs/sri_lanka_WER_index_of_pdfs.csv`
-       * `analysis/sri_lanka/outputs/disease_counts_v4.txt`
-* Ready-to-analyze enrichment (can be run standalone):
-  2\. `analysis/sri_lanka/post_processing.R`
-
-  * Reads case counts, ingests population PDF, adds weather station aggregates, land cover proportions, and joins **daily** and **weekly** ERA5 features.
-  * Outputs:
-
-    * `analysis/sri_lanka/outputs/figures/*.png` (if you enable plotting)
-    * `analysis/sri_lanka/outputs/srilanka_district_daily_era5_areawt.csv`
-    * `analysis/sri_lanka/outputs/srilanka_district_weekly_era5_areawt.csv`
-    * `analysis/sri_lanka/outputs/lep_analysis_panel.csv` (health + features)
-
-> **Shortcut for exploration:** clone the repo and run `post_processing.R`. It reads previously created WER outputs (or bundled inputs), builds features, and writes analysis files for quick modeling.
-
-### Inputs (under `analysis/sri_lanka/inputs/`)
-
-* `Mid-year_population_by_district_and_sex_2024.pdf`
-* Weather station CSVs under `inputs/station_data/`
-* Land cover GeoTIFF `SriLanka_Landcover_2018.tif`
-* ERA5 daily/district file produced by the ERA5 pipeline (`srilanka_district_daily_era5_areawt.csv`) or created by the included ERA5 scripts.
-
-### Typical outputs (under `analysis/sri_lanka/outputs/`)
-
-* `sri_lanka_WER_index_of_pdfs.csv` — catalog of WER PDFs with inferred week dates.
-* `disease_counts_v4.txt` — long table of (district × week × disease) counts.
-* `srilanka_district_daily_era5_areawt.csv` — district×day, area-weighted daily climate metrics.
-* `srilanka_district_weekly_era5_areawt.csv` — district×epi-week climate features (sums, means, lags, rolling, anomalies).
-* Optional figures: national trend, top districts, seasonality, heatmaps.
-
-### Troubleshooting
-
-* **Java/rJava/tabulizer**: If you see “JAVA\_HOME cannot be determined…”, confirm a JDK is installed and `JAVA_HOME` points to it (not to JRE). On Windows, install Adoptium Temurin (17+), then restart R/RStudio.
-* **sf/terra CRS issues**: Make sure GDAL/GEOS/PROJ are installed; verify `st_crs()` is defined and transformations succeed.
+> If you only want to explore/plot the prepared data, start at `code/preprocess/post_processing.R` after cloning.
 
 ---
 
-## Project structure (key items)
+## Quick start
+
+### Requirements
+
+* **R ≥ 4.3** with key packages:
+  `data.table`, `stringr`, `lubridate`, `rvest`, `xml2`, `pdftools`,
+  `sf`, `terra`, `exactextractr`, `arrow`, `ggplot2`, `scales`, `ragg`.
+* For optional PDF table extraction: `tabulapdf` + `tabulizerjars` (requires Java + `rJava`).
+* **GDAL/GEOS/PROJ** must be available for `sf/terra`.
+
+  * macOS: `brew install gdal proj geos`.
+
+### Environment variables (recommended)
+
+Set in `~/.Renviron`:
 
 ```
-CHI-Data/
-├─ analysis/
-│  ├─ sri_lanka/
-│  │  ├─ inputs/
-│  │  │  ├─ Mid-year_population_by_district_and_sex_2024.pdf
-│  │  │  ├─ population_by_district_in_census_years.csv
-│  │  │  └─ station_data/
-│  │  │     ├─ SriLanka_Weather_Dataset.csv
-│  │  │     └─ archive.zip, readme.txt, ...
-│  │  ├─ outputs/
-│  │  │  ├─ figures/
-│  │  │  ├─ disease_counts_v4.txt
-│  │  │  ├─ sri_lanka_WER_index_of_pdfs.csv
-│  │  │  ├─ srilanka_district_daily_era5_areawt.csv
-│  │  │  └─ srilanka_district_weekly_era5_areawt.csv
+CHI_LOCAL_WORK="C:/Users/<you>/Desktop/srilanka"
+CHI_GITHUB_ROOT="C:/Users/<you>/R_Projects/dghi-southeast-asia"
+JAVA_HOME="C:/Program Files/Eclipse Adoptium/jdk-17.0.16.8-hotspot"
+```
+
+---
+
+## Running the pipeline
+
+**Step 1. Initial ingest & extraction**
+
+```r
+source("code/preprocess/initial_processing.R")
+```
+
+* Crawls WER site, indexes PDFs, extracts weekly district counts.
+* Saves:
+
+  * `data/intermediate/sri_lanka_WER_index_of_pdfs.csv`
+  * `data/intermediate/disease_counts.txt`
+
+**Step 2. Post-processing & enrichment**
+
+```r
+source("code/preprocess/post_processing.R")
+```
+
+* Reads case counts, joins population, weather station aggregates, land cover, and ERA5 features.
+* Outputs:
+
+  * `data/intermediate/lep_analysis_panel.csv` (cases + features)
+  * `data/processed/srilanka_district_weekly_era5_areawt.csv`
+  * Figures under `reports/figures/`
+
+**Step 3. Modeling (optional)**
+
+* GAMs, GBMs, and exploratory visualization scripts in:
+
+  * `code/analysis/gams_and_gbms.R`
+  * `code/analysis/sri_lanka_modeling.R`
+
+---
+
+## Inputs
+
+Located under `data/raw/`:
+
+* `Mid-year_population_by_district_and_sex_2024.pdf`
+* `population_by_district_in_census_years.csv`
+* Weather station CSVs under `data/raw/station_data/`
+* Land cover (GeoTIFF in `.rar`): `SriLanka_Landcover_2018`
+* ERA5-derived district files produced by `code/preprocess/era5_to_weekly_features.R`
+
+---
+
+## Typical outputs
+
+* `data/intermediate/disease_counts.txt` — long-format weekly counts by district × disease.
+* `data/intermediate/sri_lanka_WER_index_of_pdfs.csv` — catalog of indexed WERs.
+* `data/intermediate/lep_analysis_panel.csv` — merged health + features.
+* `data/processed/srilanka_district_weekly_era5_areawt.csv` — climate features (means, sums, lags).
+* `reports/figures/` — time series, seasonality, top districts.
+
+---
+
+## Repository structure
+
+```
+sri-lanka-disease-surveillance/
+├─ code/
+│  ├─ analysis/
+│  │  ├─ gams_and_gbms.R
+│  │  ├─ gams_bulk.R
+│  │  ├─ initial_viz.R
+│  │  └─ sri_lanka_modeling.R
+│  ├─ helpers/
 │  │  ├─ helpers.R
-│  │  ├─ initial_processing.R        # WER crawl + extraction
-│  │  ├─ post_processing.R           # join pop, weather, land cover, ERA5; build features
-│  │  ├─ sri_lanka_era5-hourly_to_weekly-district_level.R (ERA5 pipeline pieces)
-│  │  └─ sri_lanka_modeling.R (optional modeling)
-│  └─ madagascar/ ... (separate project)
-├─ helpers/
-│  ├─ helpers.R
-│  └─ plot_helpers.R
-├─ data/ (optional shared data)
-└─ CHI-Data.Rproj
+│  │  └─ plot_helpers.R
+│  └─ preprocess/
+│     ├─ era5_to_weekly_features.R
+│     ├─ initial_processing.R
+│     └─ post_processing.R
+├─ data/
+│  ├─ raw/
+│  │  ├─ landcover/
+│  │  │  └─ SriLanka_Landcover_2018.rar
+│  │  ├─ Mid-year_population_by_district_and_sex_2024.pdf
+│  │  ├─ population_by_district_in_census_years.csv
+│  │  └─ station_data/
+│  │     ├─ SriLanka_Weather_Dataset.csv
+│  │     ├─ archive.zip
+│  │     └─ readme.txt
+│  ├─ intermediate/
+│  │  ├─ disease_counts.txt
+│  │  ├─ lep_analysis_panel.csv
+│  │  └─ sri_lanka_WER_index_of_pdfs.csv
+│  └─ processed/
+│     ├─ srilanka_district_weekly_era5_areawt.csv
+│     └─ WER_leptospirosis_counts.csv
+├─ reports/
+│  ├─ figures/
+│  │  ├─ P1_national_trend.png
+│  │  ├─ P2_top15_latest_week.png
+│  │  ├─ P3_top6_last52_facets.png
+│  │  ├─ P4_seasonality_boxplots.png
+│  │  └─ P6_yoy_change_top15.png
+│  └─ tables/
+│     └─ temp.txt
+├─ shared/helpers.R
+├─ params.yaml
+├─ readme.MD
+└─ sri-lanka-disease-surveillance.Rproj
 ```
 
+---
+
+## Troubleshooting
+
+* **Java/rJava/tabulizer**: If “JAVA\_HOME cannot be determined…”, ensure a JDK is installed and `JAVA_HOME` is set.
+* **GDAL/GEOS/PROJ issues**: Verify CRS definitions with `st_crs()`.
+* **Large ERA5 inputs**: Use `arrow` or `disk.frame` for efficiency; ensure enough memory for joins.
