@@ -169,7 +169,7 @@ if (interactive()) {
     "code/preprocess/initial_processing.R",
     "code/preprocess/post_processing.R",
     "code/analysis/sri_lanka_modeling.R",
-    "code/analysis/modeling_test.R"#,
+    "code/analysis/modeling_tests.R"#,
     # "code/README.md"
   )
   files <- normalizePath(wanted, winslash = "/", mustWork = FALSE)
