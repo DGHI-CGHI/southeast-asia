@@ -661,6 +661,7 @@ lepto_dt = lepto_dt[,lapply(.SD, sum, na.rm=TRUE), by = c('district', 'date_star
 
 fwrite(lepto_dt, paths$outputs$case_counts_txt)
 
+# Proceed to script: post_processing.R
 
 # End of script.
 ################################################################################

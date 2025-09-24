@@ -97,10 +97,10 @@ paths$fig_dir <- file.path(cfg$paths$reports, "figures")
 # 4) Additional named outputs (project-relative)
 paths$outputs <- list(
   era5_weekly_aggregated = file.path(cfg$path$intermediate, 'srilanka_district_daily_era5_areawt.csv'),
-  pdf_index_csv   = file.path("analysis", "sri_lanka", "outputs",
+  pdf_index_csv   = file.path(cfg$path$intermediate,
                       "sri_lanka_WER_index_of_pdfs.csv"),
-  case_counts_txt = file.path("analysis", "sri_lanka", "outputs",
-                      "disease_counts_v4.txt")
+  case_counts_txt = file.path(cfg$path$intermediate,
+                      "disease_counts.txt")
 )
 
 # 5) ERA5 root **local path** (hydrated by DVC), not s3://
@@ -236,8 +236,8 @@ districts_sf_m <- st_transform(districts_sf_wgs84, EA_CRS)
 # WHO:   Spatial core; computed once per domain.
 # ------------------------------------------------------------------------------
 # Read any year to get unique (lat_idx_x4, lon_idx_x4) pairs  centers
-build_latlon_lookup <- function(year_for_coords = 2020) {
-  yr <- if (is.null(year_for_coords)) 
+build_latlon_lookup <- function() {
+  yr <- 2020
   ds <- open_dataset(file.path(era5_root, yr), format = "parquet",
                      factory_options = list(exclude_invalid_files = TRUE))
   
@@ -777,27 +777,20 @@ weekly_weather_features <- function(daily_dt, weeks_dt, cfg = CFG) {
 # WHO:   Anyone testing or extending the pipeline.
 # ------------------------------------------------------------------------------
 out_daily <- summarize_years_area_weighted(years_all)
-
 # fwrite(out_daily, paths$outputs$era5_weekly_aggregated)
 
-
-lepto <- fread("C:/Users/jordan/R_Projects/dghi-southeast-asia/sri-lanka-disease-surveillance/data/intermediate/disease_counts_v4.txt")
+lepto <- fread(paths$outputs$case_counts_txt)
 weeks_dt <- unique(lepto[, .(district, date_start, date_end)])  # from your WER table
 
+# weekly level features, including lags and rolling sums. 
 features_weekly <- weekly_weather_features(out_daily, weeks_dt)
 fwrite(features_weekly, file.path(cfg$paths$processed, "srilanka_district_weekly_era5_areawt.csv"))
 
 
-
-# paths$
 # End Script
 #################!
-
-
-
-
-
-
+# ------------------------------------------------------------------------------
+# ------------------------------------------------------------------------------
 
 
 

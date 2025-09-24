@@ -113,8 +113,8 @@ paths$fig_dir <- file.path(cfg$paths$reports, "figures")
 # 4) Additional named outputs (project-relative)
 paths$outputs <- list(
   era5_weekly_aggregated = file.path(
-    cfg$path$intermediate,
-    'srilanka_district_daily_era5_areawt.csv'
+    cfg$path$processed,
+    'srilanka_district_weekly_era5_areawt.csv'
   ),
   pdf_index_csv   = file.path(cfg$path$intermediate, "sri_lanka_WER_index_of_pdfs.csv"),
   case_counts_txt = file.path(cfg$path$intermediate, "disease_counts.txt")
@@ -229,77 +229,83 @@ lep[, year := NULL] # year no longer needed after merge
 
 
 
-################################################################################
-# 3) WEATHER: MAP STATIONS  DISTRICTS & AGG DAILY -----------------------------
-################################################################################
-# SECTION GOAL: Assign station observations to districts, then compute
-# areal averages per district × day for selected variables.
 
-wx <- fread(paths$wx_stations)
-stopifnot(all(c("time", "latitude", "longitude", "city") %in% names(wx)))
-if (!inherits(wx$time, "Date"))
-  wx[, time := as.IDate(time)]
 
-# -- Assign each unique (city, lat, lon) to a district via spatial join --------
-gadm_zip <- "https://geodata.ucdavis.edu/gadm/gadm4.1/shp/gadm41_LKA_shp.zip"
-tdir <- tempfile("lka_gadm41_")
-dir.create(tdir)
-zipfile <- file.path(tdir, "gadm41_LKA_shp.zip")
-download.file(gadm_zip,
-              destfile = zipfile,
-              mode = "wb",
-              quiet = TRUE)
-unzip(zipfile, exdir = tdir)
-adm2_shp <- list.files(tdir,
-                       pattern = "^gadm41_LKA_2\\.shp$",
-                       full.names = TRUE,
-                       recursive = TRUE)
-stopifnot(length(adm2_shp) == 1)
+# ################################################################################
+# # 3) WEATHER: MAP STATIONS  DISTRICTS & AGG DAILY -----------------------------
 
-adm2 <- st_read(adm2_shp, quiet = TRUE)[, c("GID_2", "NAME_1", "NAME_2", "geometry")]
-names(adm2) <- c("gid2", "province", "district", "geometry")
-adm2$district <- norm_dist(adm2$district)
-adm2 <- st_make_valid(adm2)
+# Commented out given uncertainty in how these weather station data were fetched
+#   how, from where, etc. ERA5 should be more robust-but keeping here for reference.
 
-stations_lu <- unique(wx[, .(city, latitude, longitude)])
-stations_sf <- st_as_sf(
-  stations_lu,
-  coords = c("longitude", "latitude"),
-  crs = 4326,
-  remove = FALSE
-)
-stations_sf <- st_transform(stations_sf, st_crs(adm2))
-stations_join <- st_join(stations_sf, adm2["district"], left = TRUE)
-city2dist <- as.data.table(stations_join)[, .(city, latitude, longitude, district)]
+# ################################################################################
+# # SECTION GOAL: Assign station observations to districts, then compute
+# # areal averages per district × day for selected variables.
+# 
+# wx <- fread(paths$wx_stations)
+# stopifnot(all(c("time", "latitude", "longitude", "city") %in% names(wx)))
+# if (!inherits(wx$time, "Date"))
+#   wx[, time := as.IDate(time)]
+# 
+# # -- Assign each unique (city, lat, lon) to a district via spatial join --------
+# gadm_zip <- "https://geodata.ucdavis.edu/gadm/gadm4.1/shp/gadm41_LKA_shp.zip"
+# tdir <- tempfile("lka_gadm41_")
+# dir.create(tdir)
+# zipfile <- file.path(tdir, "gadm41_LKA_shp.zip")
+# download.file(gadm_zip, destfile = zipfile, mode = "wb", quiet = TRUE)
+# unzip(zipfile, exdir = tdir)
+# adm2_shp <- list.files(tdir,
+#                        pattern = "^gadm41_LKA_2\\.shp$",
+#                        full.names = TRUE,
+#                        recursive = TRUE)
+# stopifnot(length(adm2_shp) == 1)
+# 
+# adm2 <- st_read(adm2_shp, quiet = TRUE)[, c("GID_2", "NAME_1", "NAME_2", "geometry")]
+# names(adm2) <- c("gid2", "province", "district", "geometry")
+# adm2$district <- norm_dist(adm2$district)
+# adm2 <- st_make_valid(adm2)
+# 
+# stations_lu <- unique(wx[, .(city, latitude, longitude)])
+# stations_sf <- st_as_sf(
+#   stations_lu,
+#   coords = c("longitude", "latitude"),
+#   crs = 4326,
+#   remove = FALSE
+# )
+# stations_sf <- st_transform(stations_sf, st_crs(adm2))
+# stations_join <- st_join(stations_sf, adm2["district"], left = TRUE)
+# city2dist <- as.data.table(stations_join)[, .(city, latitude, longitude, district)]
+# 
+# wx_d <- merge(wx,
+#               city2dist,
+#               by = c("city", "latitude", "longitude"),
+#               all.x = TRUE)
+# wx_d[, district := norm_dist(district)]
+# 
+# # -- District × day means (areal average across stations) ----------------------
+# weather_means <- c(
+#   "temperature_2m_max",
+#   "temperature_2m_min",
+#   "temperature_2m_mean",
+#   "apparent_temperature_max",
+#   "apparent_temperature_min",
+#   "apparent_temperature_mean",
+#   "shortwave_radiation_sum",
+#   "precipitation_sum",
+#   "rain_sum",
+#   "precipitation_hours",
+#   "windspeed_10m_max",
+#   "windgusts_10m_max",
+#   "et0_fao_evapotranspiration"
+# )
+# 
+# keep_cols <- c("district", "time", weather_means)
+# wx_keep  <- wx_d[, intersect(names(wx_d), keep_cols), with = FALSE]
+# wx_daily <- wx_keep[, lapply(.SD, mean, na.rm = TRUE), by = .(district, date = time), .SDcols = setdiff(names(wx_keep), c("district", "time"))]
 
-wx_d <- merge(wx,
-              city2dist,
-              by = c("city", "latitude", "longitude"),
-              all.x = TRUE)
-wx_d[, district := norm_dist(district)]
 
-# -- District × day means (areal average across stations) ----------------------
-weather_means <- c(
-  "temperature_2m_max",
-  "temperature_2m_min",
-  "temperature_2m_mean",
-  "apparent_temperature_max",
-  "apparent_temperature_min",
-  "apparent_temperature_mean",
-  "shortwave_radiation_sum",
-  "precipitation_sum",
-  "rain_sum",
-  "precipitation_hours",
-  "windspeed_10m_max",
-  "windgusts_10m_max",
-  "et0_fao_evapotranspiration"
-)
 
-keep_cols <- c("district", "time", weather_means)
-wx_keep  <- wx_d[, intersect(names(wx_d), keep_cols), with = FALSE]
-wx_daily <- wx_keep[, lapply(.SD, mean, na.rm = TRUE), by = .(district, date = time), .SDcols = setdiff(names(wx_keep), c("district", "time"))]
 
-###############################################################################
+# ###############################################################################
 # 4) LAND COVER  Download .RAR  Extract  Raster ------------------------------
 # GOAL:
 #   . Download Sri Lanka land-cover archive (.rar) from NODA
@@ -405,18 +411,26 @@ file.remove(tif_file) # remove raster, keeping .tar file.
 # date_mid; add weather & land cover; write final analysis panel.
 
 # -- 5.1 ERA5 input -------------------------------------------------------------
-era5 <- fread(paths$outputs$era5_weekly_aggregated)
-stopifnot(all(c("date", "district") %in% names(era5)))
-era5[, district := norm_dist(district)]
-era5[, date := as.IDate(date)]
+era5_weekly_features <- fread(paths$outputs$era5_weekly_aggregated)
 
-# -- 5.2 Join weather (district × day) to weekly (by date_mid) -----------------
+era5_weekly_features[, date := as.IDate(date_start + (as.integer(date_end - date_start) / 2))]
+era5_weekly_features$date_start=NULL
+era5_weekly_features$date_end=NULL
+
+
+stopifnot(all(c("date", "district") %in% names(era5_weekly_features)))
+era5_weekly_features[, district := norm_dist(district)]
+era5_weekly_features[, date := as.IDate(date)]
+
+# -- 5.2 Join weather STATION (district × day) to weekly (by date_mid) -----------------
 setnames(wx_daily, "date", "wx_date")
 setkey(lep, district, date_mid)
 setkey(wx_daily, district, wx_date)
 lep <- wx_daily[lep, on = .(district, wx_date = date_mid)]  # left join onto lep
 
-# -- 5.3 Join land cover + ERA5 (align ERA5 date to date_mid) ------------------
+names(lep)
+
+# -- 5.3 Join land cover + era5_weekly_features (align era5_weekly_features date to date_mid) ------------------
 lep <- merge(lep, lc_wide, by = "district", all.x = TRUE)
 
 # Recompute date_mid defensively (ensures correct type after merges)
@@ -424,7 +438,7 @@ lep[, date_mid := as.IDate(date_start + (as.integer(date_end - date_start) / 2))
 
 lep <- merge(
   lep,
-  era5,
+  era5_weekly_features,
   by.x = c("district", "date_mid"),
   by.y = c("district", "date"),
   all.x = TRUE
@@ -434,15 +448,17 @@ lep = lep[year(date_start) <= 2024] # climate data persists through 2024 as of n
 # start in 2014, since that is when mid year population data starts
 lep = lep[year(date_start) >= 2014]
 
-# -- 5.4 Persist final analysis dataset ----------------------------------------
-fwrite(lep, file.path(cfg$paths$intermediate, "lep_analysis_panel.csv"))
+# names(lep)
+
+# # -- 5.4 Persist final analysis dataset ----------------------------------------
+fwrite(lep, file.path(cfg$paths$intermediate, "sri_lanka-disease-landcover-climate-2015_2024.csv"))
 
 message("Saved analysis panel: ",
         normalizePath(
-          file.path(cfg$paths$intermediate, "lep_analysis_panel.csv"),
+          file.path(cfg$paths$intermediate, "sri_lanka-disease-landcover-climate-2015_2024.csv"),
           winslash = "/"
         ))
 
 
-# End core workflow.
+# # End core workflow.
 ################################################################################
