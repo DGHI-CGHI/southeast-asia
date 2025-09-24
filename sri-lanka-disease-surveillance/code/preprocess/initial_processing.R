@@ -97,7 +97,6 @@ Sys.setenv("JAVA_HOME"="C:/Program Files/Eclipse Adoptium/jdk-17.0.16.8-hotspot"
 # remotes::install_github(c("ropensci/tabulizerjars", "ropensci/tabulizer"), INSTALL_opts = "--no-multiarch")
 
 library(tabulapdf)       # ropensci fork; requires rJava
-library(tabulizerjars)
 
 # ------------------------------------------------------------------------------
 # 0) CONFIG
@@ -173,8 +172,13 @@ pdfs     <- ifelse(startsWith(pdfs, "http"), pdfs, paste0(wer_base, pdfs))
 # Anchor: Vol 34 No 1 -> week ending 2007-01-05 (Sat-Fri window).
 parse_issue_from_filename_v34plus <- function(u) {
   f <- basename(u)
-  vol   <- suppressWarnings(as.integer(str_match(f, "(i)vol[._ -]*(\\d+)")[,2]))
-  issue <- suppressWarnings(as.integer(str_match(f, "(i)no[._ -]*(\\d+)")[,2]))
+  # vol   <- suppressWarnings(as.integer(str_match(f, "(i)vol[._ -]*(\\d+)")[,2]))
+  # issue <- suppressWarnings(as.integer(str_match(f, "(i)no[._ -]*(\\d+)")[,2]))
+  vol   <- str_match(f, "(?i)vol[._ -]*(\\d+)")[,2]
+  issue <- str_match(f, "(?i)no[._ -]*(\\d+)")[,2]
+  
+  vol   <- as.integer(vol)
+  issue <- as.integer(issue)
   
   # Anchor: Vol 34 No 1 -> Week ending 2007-01-05 (Sat-Fri window)
   base_start <- as.Date("2006-12-30")
@@ -202,6 +206,9 @@ parse_issue_from_filename_v34plus <- function(u) {
 idx <- rbindlist(lapply(pdfs, parse_issue_from_filename_v34plus), fill = TRUE)
 idx <- idx[!is.na(url)]
 
+idx = idx[!is.na(year)]
+idx = idx[year >= 2014]
+
 #  1.3 Persist the index for reproducibility ---------------------------------
 fwrite(idx, paths$outputs$pdf_index_csv)
 
@@ -221,10 +228,16 @@ extract_all_diseases_by_position <- function(
     keep_total = FALSE,
     debug = FALSE
 ) {
+  
   tabs <- tryCatch(
-    extract_tables(pdf_path, guess = TRUE, method = "stream", output = "tibble"),
+    suppressWarnings(
+      suppressMessages(
+        extract_tables(pdf_path, guess = TRUE, method = "stream", output = "tibble")
+      )
+    ),
     error = function(e) NULL
   )
+
   if (is.null(tabs) || !length(tabs)) return(NULL)
   
   max_idx <- max(unlist(lapply(pos_map, unlist)), na.rm = TRUE)
@@ -306,6 +319,9 @@ for (i in seq_len(nrow(idx))) {
     if (inherits(ok, "try-error")) { allresults[[i]] <- data.table(); next }
     file <- tf
   }
+  
+  allresults[[i]] <- data.table()
+  
   # Extract and attach week dates
   res <- extract_all_diseases_by_position(file, debug = FALSE)
   if (!is.null(res) && nrow(res)) {
@@ -314,9 +330,16 @@ for (i in seq_len(nrow(idx))) {
       date_start = cur$date_start,
       date_end   = cur$date_end
     )]
+    
+    res = res[!is.na(district)]
+
+    res$file = cur$file
+    res$url = cur$url
+    
+    if (max(nchar(res$district)) > 18) stop()
+        
+    
     allresults[[i]] <- res
-  } else {
-    allresults[[i]] <- data.table()
   }
   if (i %% 25 == 0) message(".processed ", i, " PDFs")
 }
