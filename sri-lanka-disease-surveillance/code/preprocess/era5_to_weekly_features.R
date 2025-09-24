@@ -82,7 +82,7 @@ paths <- list(
   # work_out = file.path(cfg$paths$intermediate, "outputs")
 )
 
-
+# 
 # 2) Source inputs that should live in the project repo:
 #    Recommend moving PDFs/CSVs under data/raw or data/raw/external.
 #    For now, keep your current filenames but make them relative.

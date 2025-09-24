@@ -10,6 +10,23 @@ library(ranger)       # RF
 library(glmnet)       # LASSO/EN
 library(car)          # vif
 
+
+
+
+
+era5_var_names = names(fread(paths$outputs$era5_weekly_aggregated))
+
+
+lepto <- fread(file.path(cfg$paths$intermediate, "lep_analysis_panel.csv"))
+# names(le)
+lepto[is.na(poptot)][,.N,by=district]
+lepto[!is.na(poptot)][,.N,by=district]
+
+lepto[is.na(poptot)][,.N,by=year]
+lepto$date = lepto$date_mid
+
+
+
 setDTthreads(percent = 100)
 
 `%||%` <- function(a,b) if (!is.null(a)) a else b
@@ -170,17 +187,12 @@ stopifnot(length(outcome_cols) > 0)
 
 # ======================= FEATURE ENGINEERING ==================================
 # All ERA5/weather vars you currently have
-wx_all <- intersect(c(
-  "temperature_2m_max","temperature_2m_min","temperature_2m_mean",
-  "apparent_temperature_max","apparent_temperature_min","apparent_temperature_mean",
-  "shortwave_radiation_sum","precipitation_sum","rain_sum","precipitation_hours",
-  "windspeed_10m_max","windgusts_10m_max","et0_fao_evapotranspiration"
-), names(DT))
+wx_all = era5_var_names[!era5_var_names %in% c("district","date","year")]
 
 # Make lags/rolling means by district
 setkey(DT, district, date)
 make_lags_rolls <- function(DT, v, lags = c(1,2,3,4), k_roll = c(2,4,8)) {
-  for (L in lags) DT[, paste0(v, "_lag", L) := shift(get(v), L), by = district]
+  for (L in lags) DT[, paste0(v, "_lag", L) := data.table::shift(get(v), L), by = district]
   for (K in k_roll) DT[, paste0(v, "_roll", K) := frollmean(get(v), K, align="right"), by = district]
   invisible(NULL)
 }
@@ -210,29 +222,31 @@ ok_cols  <- names(na_share)[na_share < 0.30]  # <30% missing allowed
 zv       <- DT[, sapply(.SD, function(z) data.table(z)[, uniqueN(z, na.rm = TRUE)]), .SDcols = ok_cols]
 ok_cols  <- ok_cols[zv > 1]
 PREDICTORS <- ok_cols
+P_SMALL = PREDICTORS
 
-# Compact set for stability (you can switch to PREDICTORS)
-P_SMALL <- unique(c(
-  "temperature_2m_mean","precipitation_sum","rain_sum","precipitation_hours",
-  "temperature_2m_mean_lag1","temperature_2m_mean_lag2",
-  "precipitation_sum_lag1","precipitation_sum_lag2",
-  "apparent_temperature_mean","apparent_temperature_mean_lag1",
-  "shortwave_radiation_sum","shortwave_radiation_sum_lag1",
-  "windspeed_10m_max","windgusts_10m_max",
-  "temperature_2m_mean_roll4","precipitation_sum_roll4",
-  lc_vars, "precipX_paddy","tempX_built","sin52","cos52"
-))
-P_SMALL <- intersect(P_SMALL, PREDICTORS)
-stopifnot(length(P_SMALL) > 0)
 
+# as.data.frame(jj::countna(DT))
 # ========================== SPLITS ============================================
 setorder(DT, date)
-cut_date <- DT[, date][floor(.N * 0.8)]
+
+# cut_date <- DT[, date][floor(.N * 0.8)]
+cut_date <- DT$date[floor(0.8 * nrow(DT))]
+
 TR <- DT[date <= cut_date]
 TE <- DT[date  > cut_date]
 
 hz <- harmonize_factors(TR, TE, facs = c("district","year"))
 TR <- hz$TR; TE <- hz$TE
+
+
+
+
+
+
+
+
+
+
 
 # Rolling-origin CV
 rolling_origin_eval <- function(DT, outcome, preds, k = 5, family = c("gaussian","poisson","negbin")) {
@@ -393,6 +407,42 @@ rolling_origin_eval <- function(
 }
 
 
+
+# DT$temperature_2m_min_roll8
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 # ========================== MODEL LOOP ========================================
 results_all <- list()
 
@@ -403,6 +453,19 @@ outcome_cols = c("lepto","dengue")
 
 
 outcome_cols = 'lepto'
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

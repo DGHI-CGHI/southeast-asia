@@ -368,7 +368,7 @@ if (!file.exists(landcover_file)) {
     extra = "-L -A 'Mozilla/5.0'"
   )
 }
-
+# 
 extract_rar(landcover_file, lc_dir)
 
 # Point terra to the extracted .tif (adjust name if different inside the RAR)

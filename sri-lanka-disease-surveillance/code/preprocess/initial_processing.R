@@ -229,7 +229,7 @@ iso_weeks_in_year <- function(y) {
   iw <- ISOweek(sprintf("%d-12-28", y))  # e.g., "2021-W52-2"
   as.integer(str_match(iw, "W(\\d{2})")[,2])
 }
-
+# 
 parse_issue_from_filename_wer <- function(u, lang = "English") {
   f <- basename(u)
   m <- str_match(f, "(?i)vol[._ -]*(\\d+)[^\\d]+no[._ -]*(\\d+)")
@@ -264,7 +264,7 @@ parse_issue_from_filename_wer <- function(u, lang = "English") {
 }
 
 
-# 
+# s
 # 
 # # --- quick sanity checks on your examples ---
 # parse_issue_from_filename_wer("https://.../vol_48_no_53-english.pdf")
