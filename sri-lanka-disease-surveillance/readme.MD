@@ -14,7 +14,7 @@ Link Sri Lanka’s **Weekly Epidemiological Reports (WER)** to **population**, *
 
 ```bash
 # pick any folder you like
-git clone https://github.com/<your-org-or-user>/sri-lanka-disease-surveillance.git
+git clone https://github.com/DGHI-CHI/southeast-asia/sri-lanka-disease-surveillance.git
 cd sri-lanka-disease-surveillance
 ```
 
