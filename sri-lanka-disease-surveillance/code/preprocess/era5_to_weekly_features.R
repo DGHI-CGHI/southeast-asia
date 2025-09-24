@@ -77,8 +77,9 @@ suppressPackageStartupMessages({
 
 # Where to put scratch outputs during processing
 paths <- list(
-  temp_dir = file.path(cfg$paths$intermediate, "temp"),
-  work_out = file.path(cfg$paths$intermediate, "outputs")
+  temp_dir = file.path(cfg$paths$intermediate, "temp")
+  # ,
+  # work_out = file.path(cfg$paths$intermediate, "outputs")
 )
 
 
@@ -777,12 +778,18 @@ weekly_weather_features <- function(daily_dt, weeks_dt, cfg = CFG) {
 # ------------------------------------------------------------------------------
 out_daily <- summarize_years_area_weighted(years_all)
 
-fwrite(out_daily, paths$outputs$era5_weekly_aggregated)
+# fwrite(out_daily, paths$outputs$era5_weekly_aggregated)
+
+
+lepto <- fread("C:/Users/jordan/R_Projects/dghi-southeast-asia/sri-lanka-disease-surveillance/data/intermediate/disease_counts_v4.txt")
+weeks_dt <- unique(lepto[, .(district, date_start, date_end)])  # from your WER table
+
+features_weekly <- weekly_weather_features(out_daily, weeks_dt)
+fwrite(features_weekly, file.path(cfg$paths$processed, "srilanka_district_weekly_era5_areawt.csv"))
 
 
 
-
-
+# paths$
 # End Script
 #################!
 

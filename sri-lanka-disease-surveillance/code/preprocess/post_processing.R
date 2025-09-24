@@ -82,54 +82,53 @@ Sys.setenv("JAVA_HOME" = "C:/Program Files/Eclipse Adoptium/jdk-17.0.16.8-hotspo
 # remotes::install_github(c("ropensci/tabulizerjars", "ropensci/tabulizer"), INSTALL_opts = "--no-multiarch")
 
 library(tabulapdf)       # ropensci fork; requires rJava
-library(tabulizerjars)
 
 # ------------------------------------------------------------------------------
 # 0) CONFIG
 # ------------------------------------------------------------------------------
-# Summary: Define project-relative paths using cfg (from .Rprofile) + p() helper.
+# Summary: Define project-relative paths using cfg (from .Rprofile) + file.path() helper.
 
 # 1) No setwd() and no absolute C:\ paths
 #    Everything below is relative to the Sri Lanka subproject root.
 
 # Where to put scratch outputs during processing
 paths <- list(
-  temp_dir = p(cfg$paths$intermediate, "temp"),
-  work_out = p(cfg$paths$intermediate, "outputs"),
-  helpers  = p('code/helpers/helpers.R')
+  temp_dir = file.path(cfg$paths$intermediate, "temp"),
+  work_out = file.path(cfg$paths$intermediate, "outputs"),
+  helpers  = file.path('code/helpers/helpers.R')
 )
 
 
 # 2) Source inputs that should live in the project repo:
 #    Recommend moving PDFs/CSVs under data/raw or data/raw/external.
 #    For now, keep your current filenames but make them relative.
-paths$midyear_pop <- p(cfg$paths$raw,
+paths$midyear_pop <- file.path(cfg$paths$raw,
                        "Mid-year_population_by_district_and_sex_2024.pdf")
-paths$wx_stations <- p(cfg$paths$raw , "station_data/SriLanka_Weather_Dataset.csv")
-paths$era5_daily  <- p(cfg$paths$raw, "srilanka_district_daily_era5_areawt.csv")
+paths$wx_stations <- file.path(cfg$paths$raw , "station_data/SriLanka_Weather_Dataset.csv")
+paths$era5_daily  <- file.path(cfg$paths$raw, "srilanka_district_daily_era5_areawt.csv")
 
 # 3) Output figures directory inside project
-paths$fig_dir <- p(cfg$paths$reports, "figures")
+paths$fig_dir <- file.path(cfg$paths$reports, "figures")
 
 # 4) Additional named outputs (project-relative)
 paths$outputs <- list(
-  era5_weekly_aggregated = p(
+  era5_weekly_aggregated = file.path(
     cfg$path$intermediate,
     'srilanka_district_daily_era5_areawt.csv'
   ),
-  pdf_index_csv   = p(cfg$path$intermediate, "sri_lanka_WER_index_of_pdfs.csv"),
-  case_counts_txt = p(cfg$path$intermediate, "disease_counts_v4.txt")
+  pdf_index_csv   = file.path(cfg$path$intermediate, "sri_lanka_WER_index_of_pdfs.csv"),
+  case_counts_txt = file.path(cfg$path$intermediate, "disease_counts.txt")
 )
 
 # 5) ERA5 root **local path** (hydrated by DVC), not s3://
 #    DVC should import/pull into data/raw/era5/
-era5_root <- p(cfg$paths$raw, "era5")
+era5_root <- file.path(cfg$paths$raw, "era5")
 # era5_root <- "s3://dghi-chi/data/se-asia/sri-lanka-disease-surveillance/era5/"
 
 
 # 6) Create any needed directories once (safe if they already exist)
 ensure_dir <- function(...)
-  dir.create(p(...), recursive = TRUE, showWarnings = FALSE)
+  dir.create(file.path(...), recursive = TRUE, showWarnings = FALSE)
 ensure_dir(cfg$paths$intermediate, "temp")
 ensure_dir(cfg$paths$intermediate, "outputs")
 ensure_dir(cfg$paths$reports, "figures")
@@ -139,6 +138,7 @@ ensure_dir(cfg$paths$reports, "figures")
 # These must define: DISEASES, POS_MAP, norm_dist(), .norm(), .is_footer(),
 # .parse_ints(), .extract_district_from_row(), .pick_n(), DIST_CANON
 source(paths$helpers)
+
 
 
 ################################################################################
@@ -203,10 +203,49 @@ if (file.exists(paths$midyear_pop)) {
 }
 stopifnot(!is.null(pop_dt) && nrow(pop_dt) > 0)
 pop_dt
+pop_dt = pop_dt[!is.na(district)] # remove national level totals.
 
+
+
+pop_dt[!district %in% lep$district]
+
+lep[!district %in% pop_dt$district][,.N,by=district]
+
+lep[,.N,by=district]
+
+
+lep = lep[district != 'Na']
+
+
+lep[, district := gsub(" Na", "", district)]
+lep[,.N,by=district]
+
+
+lep = lep[!district %like% c("Timeliness")]
+lep = lep[!district %like% c("Timely")]
+lep = lep[!district %like% c("Selected Notifiable Diseases")]
+lep = lep[!district %like% c("Tab Le")]
+
+lep[,.N,by=district][order(N)]
+
+'Anuradha' := 'Anuradhapu'
+'Kili-'='Kilinochchi'
+Kilinoch-='Kilinochchi'
+
+Nuwara-Eliya
+Nuwara
+
+
+districtnames = unique(lep$district)
+districtnames[districtnames %like% "Na"]
 
 # -- 2.3 Keep only valid districts; fill pre-2014 with 2014 pop ----------------
 lep = lep[district %in% pop_dt$district]
+
+
+
+
+
 
 # current mid year pop data starts in 2014, so for years in health data before that, simply using 2014 pop for now.
 lep[, year2merge := fifelse(year >= 2014, year, 2014L)]
@@ -248,7 +287,7 @@ download.file(gadm_zip,
               destfile = zipfile,
               mode = "wb",
               quiet = TRUE)
-unzip(zipfile, exdir = tdir)
+unzifile.path(zipfile, exdir = tdir)
 adm2_shp <- list.files(tdir,
                        pattern = "^gadm41_LKA_2\\.shp$",
                        full.names = TRUE,
@@ -328,16 +367,18 @@ if (!file.exists(landcover_file)) {
     method = "curl",
     extra = "-L -A 'Mozilla/5.0'"
   )
-  extract_rar(landcover_file, lc_dir)
 }
+
+extract_rar(landcover_file, lc_dir)
 
 # Point terra to the extracted .tif (adjust name if different inside the RAR)
 tif_file <- paste0(landcover_file, ".tif")
 
 if (is.na(tif_file))
-  stop("No .tif found after extraction in: ", lc_dir)
+  stofile.path("No .tif found after extraction in: ", lc_dir)
 
 r <- rast(tif_file)
+file.remove(tif_file) # remove raster, keeping .tar file.
 
 # Dissolve to district and match raster CRS
 adm2_diss <- adm2 |>
@@ -402,7 +443,7 @@ lc_wide[, (prop_cols) := lapply(.SD, function(z)
 # date_mid; add weather & land cover; write final analysis panel.
 
 # -- 5.1 ERA5 input -------------------------------------------------------------
-era5 <- fread(paths$era5_daily)
+era5 <- fread(paths$outputs$era5_weekly_aggregated)
 stopifnot(all(c("date", "district") %in% names(era5)))
 era5[, district := norm_dist(district)]
 era5[, date := as.IDate(date)]
@@ -428,12 +469,15 @@ lep <- merge(
 )
 
 lep = lep[year(date_start) <= 2024] # climate data persists through 2024 as of now.
+# start in 2014, since that is when mid year population data starts
+lep = lep[year(date_start) >= 2014]
 
 # -- 5.4 Persist final analysis dataset ----------------------------------------
-fwrite(lep, file.path(paths$work_out, "lep_analysis_panel.csv"))
+fwrite(lep, file.path(cfg$paths$intermediate, "lep_analysis_panel.csv"))
+
 message("Saved analysis panel: ",
         normalizePath(
-          file.path(paths$work_out, "lep_analysis_panel.csv"),
+          file.path(cfg$paths$intermediate, "lep_analysis_panel.csv"),
           winslash = "/"
         ))
 
