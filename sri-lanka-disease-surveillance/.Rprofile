@@ -107,3 +107,54 @@ get_era5_root <- function() {
   "s3://dghi-chi/data/se-asia/sri-lanka-disease-surveillance/era5"
 }
 era5_root <- strip_trailing_slash(get_era5_root())
+
+
+
+
+## .Rprofile - put this in your project root
+
+.local_open_files <- function() {
+  wanted <- c(
+    "code/analysis/sri_lanka_modeling.R",
+    "code/preprocess/era5_to_weekly_features.R",
+    "code/preprocess/initial_processing.R",  # preferred location
+    "code/preprocess/post_processing.R",
+    "code/initial_processing.R"              # fallback if it's here
+  )
+  
+  files <- normalizePath(wanted, winslash = "/", mustWork = FALSE)
+  files <- files[file.exists(files)]
+  if (!length(files)) {
+    message("Auto-open: no target files found (skipping).")
+    return(invisible())
+  }
+  
+  # Prefer RStudio API when available, else use file.edit()
+  if (requireNamespace("rstudioapi", quietly = TRUE) && rstudioapi::isAvailable()) {
+    message("Auto-open via rstudioapi: ", paste(basename(files), collapse = ", "))
+    for (fp in files) try(rstudioapi::navigateToFile(fp), silent = TRUE)
+    try(rstudioapi::executeCommand("activateConsole"), silent = TRUE)
+  } else {
+    message("Auto-open via file.edit(): ", paste(basename(files), collapse = ", "))
+    for (fp in files) try(file.edit(fp), silent = TRUE)
+  }
+  
+  # Don't re-open repeatedly in this session
+  options(project_docs_opened = TRUE)
+}
+
+if (interactive()) {
+  # Run after RStudio finishes initializing the session
+  setHook("rstudio.sessionInit", function(isNewSession) {
+    if (!isTRUE(getOption("project_docs_opened"))) .local_open_files()
+  }, action = "append")
+  
+  # Fallback: if we're NOT in RStudio (or the hook doesn't fire), do it now.
+  if (Sys.getenv("RSTUDIO") != "1" && !isTRUE(getOption("project_docs_opened"))) {
+    .local_open_files()
+  }
+}
+
+
+
+
