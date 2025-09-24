@@ -1,3 +1,0 @@
-stages:
-  era5_to_weekly:
-    cmd: \
