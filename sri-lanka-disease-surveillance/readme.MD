@@ -26,22 +26,6 @@ southeast-asia/sri-lanka-disease-surveillance/sri-lanka-disease-surveillance.Rpr
 ```
 (*Opening the project sets the working directory and plays nicely with `.Rprofile`.)
 
-### 3) Minimal config (paths)
-
-Add this to your **`~/.Rprofile`** *or* to a **project-local** `.Rprofile` in the repo root:
-
-```r
-# Example folder layout — edit to your machine
-cfg <- list(
-  paths = list(
-    raw          = "data/raw",
-    intermediate = "data/intermediate",
-    processed    = "data/processed",
-    reports      = "reports"
-  )
-)
-```
-
 > The modeling script reads the analysis panel at
 > `file.path(cfg$paths$intermediate, "sri_lanka-disease-landcover-climate-2015_2024.csv")`.
 
