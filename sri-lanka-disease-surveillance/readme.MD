@@ -15,7 +15,7 @@ Link Sri Lanka’s **Weekly Epidemiological Reports (WER)** to **population**, *
 ```bash
 # pick any folder you like
 git clone https://github.com/DGHI-CHI/southeast-asia/
-cd sri-lanka-disease-surveillance
+cd southeast-asia/sri-lanka-disease-surveillance
 ```
 
 ### 2) Open the RStudio project
