@@ -112,9 +112,60 @@ era5_root <- strip_trailing_slash(get_era5_root())
 
 
 ## .Rprofile - put this in your project root
+.local_open_welcome <- function() {
+  # Prefer Quarto ??? then R Markdown ??? else fall back to README.md in source pane
+  if (requireNamespace("rstudioapi", quietly = TRUE) && rstudioapi::isAvailable()) {
+    proj <- rprojroot::find_root_file(".", criterion = rprojroot::is_rstudio_project)
+    qmd  <- file.path(proj, "WELCOME.qmd")
+    rmd  <- file.path(proj, "WELCOME.Rmd")
+    readme_md <- file.path(proj, "README.md")
+    
+    # Render Quarto if present
+    if (file.exists(qmd) && requireNamespace("quarto", quietly = TRUE)) {
+      out <- try(quarto::quarto_render(qmd, quiet = TRUE), silent = TRUE)
+      if (!inherits(out, "try-error")) {
+        # Quarto returns the output path; open in Viewer
+        rstudioapi::viewer(out)
+        return(invisible())
+      }
+    }
+    
+    # Render Rmd if present
+    if (file.exists(rmd) && requireNamespace("rmarkdown", quietly = TRUE)) {
+      html <- file.path(tempdir(), "WELCOME.html")
+      ok <- try(rmarkdown::render(rmd, output_file = html, quiet = TRUE), silent = TRUE)
+      if (!inherits(ok, "try-error") && file.exists(html)) {
+        rstudioapi::viewer(html)
+        return(invisible())
+      }
+    }
+    
+    # Fallback: open README.md in a source tab
+    if (file.exists(readme_md)) {
+      rstudioapi::navigateToFile(readme_md)
+    }
+  } else {
+    # Not in RStudio ??? open README.md in the default editor if available
+    if (file.exists("README.md")) try(file.edit("README.md"), silent = TRUE)
+  }
+}
+
+if (interactive()) {
+  setHook("rstudio.sessionInit", function(isNewSession) {
+    # Run both: open your working scripts and the welcome page
+    if (!isTRUE(getOption("project_docs_opened"))) {
+      .local_open_files()       # your existing function that opens scripts
+      .local_open_welcome()     # NEW: opens the tidy README/welcome
+      options(project_docs_opened = TRUE)
+    }
+  }, action = "append")
+}
+
+
 
 .local_open_files <- function() {
   wanted <- c(
+    
     "code/analysis/sri_lanka_modeling.R",
     "code/preprocess/era5_to_weekly_features.R",
     "code/preprocess/initial_processing.R",  # preferred location

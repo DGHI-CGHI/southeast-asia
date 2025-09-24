@@ -1,0 +1,21 @@
+---
+  title: "Sri Lanka Disease Surveillance - Welcome"
+format: html
+toc: true
+---
+  
+  # Start here
+  
+  - **Open:** `code/analysis/sri_lanka_modeling.R`
+- **Panel CSV:** `data/intermediate/sri_lanka-disease-landcover-climate-2015_2024.csv`
+- **Paths:** set in `.Rprofile` under `cfg$paths`
+
+# Quick links
+
+- Preprocess (PDF ??? counts): `code/preprocess/initial_processing.R`  
+- ERA5 weekly features: `code/preprocess/era5_to_weekly_features.R`  
+- Merge to final panel: `code/preprocess/post_processing.R`  
+
+# Notes
+- Week 53 coerced to 52 for cyclic splines.
+- Large ERA5 files? Start with the prebuilt panel.
