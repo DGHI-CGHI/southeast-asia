@@ -20,7 +20,10 @@ cd southeast-asia/sri-lanka-disease-surveillance
 
 ### 2) Open the RStudio project
 
-Double-click **southeast-asia/sri-lanka-disease-surveillance/sri-lanka-disease-surveillance.Rproj** (in the repo root).
+Double-click 
+```bash
+southeast-asia/sri-lanka-disease-surveillance/sri-lanka-disease-surveillance.Rproj
+```
 (Opening the project sets the working directory and plays nicely with `.Rprofile`.)
 
 ### 3) Minimal config (paths)
