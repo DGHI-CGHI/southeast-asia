@@ -165,12 +165,12 @@ if (interactive()) {
 
 .local_open_files <- function() {
   wanted <- c(
+    
     "code/analysis/sri_lanka_modeling.R",
     "code/preprocess/era5_to_weekly_features.R",
     "code/preprocess/initial_processing.R",  # preferred location
     "code/preprocess/post_processing.R",
     "code/initial_processing.R"              # fallback if it's here
-    "code/README.md"  # nice to have in a tab
   )
   
   files <- normalizePath(wanted, winslash = "/", mustWork = FALSE)
@@ -211,7 +211,6 @@ if (interactive()) {
     rstudioapi::navigateToFile(rd)  # last resort: open as plain text
   }
 }
-
 if (interactive()) {
   # Run after RStudio finishes initializing the session
   setHook("rstudio.sessionInit", function(isNewSession) {
@@ -224,12 +223,5 @@ if (interactive()) {
     .local_open_readme_html()
   }
 }
-
-
-
-
-
-
-
 
 
