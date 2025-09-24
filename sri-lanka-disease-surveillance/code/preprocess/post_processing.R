@@ -88,7 +88,7 @@ library(tabulapdf)       # ropensci fork; requires rJava
 # ------------------------------------------------------------------------------
 # Summary: Define project-relative paths using cfg (from .Rprofile) + file.path() helper.
 
-# 1) No setwd() and no absolute C:\ paths
+# 1) No setwd() and no absolute C:\ pathsa
 #    Everything below is relative to the Sri Lanka subproject root.
 
 # Where to put scratch outputs during processing
