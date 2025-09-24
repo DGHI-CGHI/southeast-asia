@@ -344,7 +344,7 @@ extract_week_ending <- function(pdf_path) {
 
 extract_week_ending(pdf_path)
 
-
+# 
 
 
 #  2.1 Core extractor (position-based A/B pairs across all pages) ------------
