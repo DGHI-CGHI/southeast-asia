@@ -165,64 +165,98 @@ if (interactive()) {
 
 .local_open_files <- function() {
   wanted <- c(
-    
     "code/analysis/sri_lanka_modeling.R",
     "code/preprocess/era5_to_weekly_features.R",
     "code/preprocess/initial_processing.R",  # preferred location
     "code/preprocess/post_processing.R",
-    "code/initial_processing.R"              # fallback if it's here
+    "code/initial_processing.R",              # fallback if it's here
+    "code/README.md"  # nice to have in a tab
   )
   
-  files <- normalizePath(wanted, winslash = "/", mustWork = FALSE)
-  files <- files[file.exists(files)]
-  if (!length(files)) {
-    message("Auto-open: no target files found (skipping).")
-    return(invisible())
+  # Resolve relative to project root if known; else current working dir
+  proj_root <- tryCatch(
+    if (requireNamespace("rstudioapi", quietly = TRUE) && rstudioapi::isAvailable())
+      rstudioapi::getActiveProject()
+    else NULL,
+    error = function(e) NULL
+  )
+  base <- if (!is.null(proj_root)) proj_root else getwd()
+  
+  paths <- normalizePath(file.path(base, wanted), winslash = "/", mustWork = FALSE)
+  paths <- paths[file.exists(paths)]
+  if (!length(paths)) {
+    message("[auto-open] No target files found. Looked for:\n  - ", paste(wanted, collapse = "\n  - "))
+    return(invisible(FALSE))
   }
   
-  # Prefer RStudio API when available, else use file.edit()
   if (requireNamespace("rstudioapi", quietly = TRUE) && rstudioapi::isAvailable()) {
-    message("Auto-open via rstudioapi: ", paste(basename(files), collapse = ", "))
-    for (fp in files) try(rstudioapi::navigateToFile(fp), silent = TRUE)
+    message("[auto-open] Opening via rstudioapi:\n  - ", paste(basename(paths), collapse = "\n  - "))
+    for (fp in paths) try(rstudioapi::navigateToFile(fp), silent = TRUE)
     try(rstudioapi::executeCommand("activateConsole"), silent = TRUE)
   } else {
-    message("Auto-open via file.edit(): ", paste(basename(files), collapse = ", "))
-    for (fp in files) try(file.edit(fp), silent = TRUE)
+    message("[auto-open] Opening via file.edit():\n  - ", paste(basename(paths), collapse = "\n  - "))
+    for (fp in paths) try(file.edit(fp), silent = TRUE)
+  }
+  invisible(TRUE)
+}
+
+.local_open_welcome <- function() {
+  # Prefer a rendered welcome in the Viewer; fall back to README tab
+  if (!(requireNamespace("rstudioapi", quietly = TRUE) && rstudioapi::isAvailable())) {
+    message("[welcome] rstudioapi not available; skipping Viewer welcome.")
+    return(invisible(FALSE))
   }
   
-  # Don't re-open repeatedly in this session
-  options(project_docs_opened = TRUE)
-}
-
-.local_open_readme_html <- function() {
-  if (!requireNamespace("rstudioapi", quietly=TRUE) || !rstudioapi::isAvailable()) return(invisible())
-  rd <- "README.md"
-  if (!file.exists(rd)) return(invisible())
-  html <- file.path(tempdir(), "README.html")
-  # use rmarkdown if present; otherwise quick pandoc call
-  if (requireNamespace("rmarkdown", quietly=TRUE)) {
-    ok <- try(rmarkdown::render(rd, output_file = html, quiet = TRUE), silent = TRUE)
-    if (!inherits(ok, "try-error") && file.exists(html)) rstudioapi::viewer(html)
-  } else if (nzchar(Sys.which("pandoc"))) {
-    cmd <- sprintf('"%s" "%s" -o "%s"', Sys.which("pandoc"), rd, html)
-    system(cmd)
-    if (file.exists(html)) rstudioapi::viewer(html)
-  } else {
-    rstudioapi::navigateToFile(rd)  # last resort: open as plain text
+  proj_root <- tryCatch(rstudioapi::getActiveProject(), error = function(e) NULL)
+  base <- if (!is.null(proj_root)) proj_root else getwd()
+  qmd <- file.path(base, "WELCOME.qmd")
+  rmd <- file.path(base, "WELCOME.Rmd")
+  md  <- file.path(base, "README.md")
+  
+  # Try Quarto
+  if (file.exists(qmd) && requireNamespace("quarto", quietly = TRUE)) {
+    out <- try(quarto::quarto_render(qmd, quiet = TRUE), silent = TRUE)
+    if (!inherits(out, "try-error") && length(out) == 1 && file.exists(out)) {
+      message("[welcome] Showing WELCOME.qmd in Viewer.")
+      rstudioapi::viewer(out); return(invisible(TRUE))
+    }
   }
+  
+  # Try R Markdown
+  if (file.exists(rmd) && requireNamespace("rmarkdown", quietly = TRUE)) {
+    html <- file.path(tempdir(), "WELCOME.html")
+    ok <- try(rmarkdown::render(rmd, output_file = html, quiet = TRUE), silent = TRUE)
+    if (!inherits(ok, "try-error") && file.exists(html)) {
+      message("[welcome] Showing WELCOME.Rmd in Viewer.")
+      rstudioapi::viewer(html); return(invisible(TRUE))
+    }
+  }
+  
+  # Fallback: open README.md in a source tab if present
+  if (file.exists(md)) {
+    message("[welcome] Opening README.md in a tab (fallback).")
+    rstudioapi::navigateToFile(md); return(invisible(TRUE))
+  }
+  
+  message("[welcome] No WELCOME.qmd/Rmd or README.md found.")
+  invisible(FALSE)
 }
 
+# One reliable sessionInit hook + slight delay (Viewer/API is fully ready)
 if (interactive()) {
-  # Run after RStudio finishes initializing the session
   setHook("rstudio.sessionInit", function(isNewSession) {
-    if (!isTRUE(getOption("project_docs_opened"))) .local_open_files()
+    if (isTRUE(getOption("project_docs_opened"))) return(invisible())
+    # Delay a tad so RStudio UI is ready
+    open_all <- function() {
+      try(.local_open_files(), silent = TRUE)
+      try(.local_open_welcome(), silent = TRUE)
+      options(project_docs_opened = TRUE)
+    }
+    if (requireNamespace("later", quietly = TRUE)) {
+      later::later(open_all, delay = 0.7)
+    } else {
+      # last resort if 'later' missing
+      Sys.sleep(0.7); open_all()
+    }
   }, action = "append")
-  
-  # Fallback: if we're NOT in RStudio (or the hook doesn't fire), do it now.
-  if (Sys.getenv("RSTUDIO") != "1" && !isTRUE(getOption("project_docs_opened"))) {
-    .local_open_files()
-    .local_open_readme_html()
-  }
 }
-
-
