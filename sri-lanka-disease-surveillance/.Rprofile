@@ -238,8 +238,6 @@ if (interactive()) {
   # Non-RStudio fallback (opens files + README as text)
   if (Sys.getenv("RSTUDIO") != "1" && !isTRUE(getOption("project_docs_opened"))) {
     .local_open_files()
-    .local_open_readme_html()
-    
     Sys.sleep(10)
     .local_open_readme_html()
     
@@ -248,4 +246,25 @@ if (interactive()) {
 }
 # -------------------------------------------------------------------------------
 
+
+.local_open_readme_html()
+
+
+.local_open_readme_html()
+
+
+
+.local_open_readme_html()
+
+
+.local_open_readme_html()
+
+
+.local_open_readme_html()
+
+
+.local_open_readme_html()
+
+
+.local_open_readme_html()
 
