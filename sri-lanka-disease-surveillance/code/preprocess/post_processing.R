@@ -154,6 +154,7 @@ lep[, `:=`(
   date_mid = as.IDate(date_mid),
   date_end = as.IDate(date_end)
 )]
+lep$year = lubridate::year(lep$date_start)
 
 ################################################################################
 # 2) POPULATION: PDF  TIDY (or CSV fallback) ----------------------------------
@@ -205,47 +206,8 @@ stopifnot(!is.null(pop_dt) && nrow(pop_dt) > 0)
 pop_dt
 pop_dt = pop_dt[!is.na(district)] # remove national level totals.
 
-
-
-pop_dt[!district %in% lep$district]
-
-lep[!district %in% pop_dt$district][,.N,by=district]
-
-lep[,.N,by=district]
-
-
-lep = lep[district != 'Na']
-
-
-lep[, district := gsub(" Na", "", district)]
-lep[,.N,by=district]
-
-
-lep = lep[!district %like% c("Timeliness")]
-lep = lep[!district %like% c("Timely")]
-lep = lep[!district %like% c("Selected Notifiable Diseases")]
-lep = lep[!district %like% c("Tab Le")]
-
-lep[,.N,by=district][order(N)]
-
-'Anuradha' := 'Anuradhapu'
-'Kili-'='Kilinochchi'
-Kilinoch-='Kilinochchi'
-
-Nuwara-Eliya
-Nuwara
-
-
-districtnames = unique(lep$district)
-districtnames[districtnames %like% "Na"]
-
-# -- 2.3 Keep only valid districts; fill pre-2014 with 2014 pop ----------------
-lep = lep[district %in% pop_dt$district]
-
-
-
-
-
+# lep[!district %in% pop_dt$district][,.N,by=district]
+# lep[district %in% pop_dt$district][,.N,by=district][order(district)]
 
 # current mid year pop data starts in 2014, so for years in health data before that, simply using 2014 pop for now.
 lep[, year2merge := fifelse(year >= 2014, year, 2014L)]
@@ -287,7 +249,7 @@ download.file(gadm_zip,
               destfile = zipfile,
               mode = "wb",
               quiet = TRUE)
-unzifile.path(zipfile, exdir = tdir)
+unzip(zipfile, exdir = tdir)
 adm2_shp <- list.files(tdir,
                        pattern = "^gadm41_LKA_2\\.shp$",
                        full.names = TRUE,
@@ -373,12 +335,11 @@ extract_rar(landcover_file, lc_dir)
 
 # Point terra to the extracted .tif (adjust name if different inside the RAR)
 tif_file <- paste0(landcover_file, ".tif")
-
+# file.exists(tif_file)
 if (is.na(tif_file))
   stofile.path("No .tif found after extraction in: ", lc_dir)
 
 r <- rast(tif_file)
-file.remove(tif_file) # remove raster, keeping .tar file.
 
 # Dissolve to district and match raster CRS
 adm2_diss <- adm2 |>
@@ -435,6 +396,7 @@ row_sums <- lc_wide[, rowSums(.SD), .SDcols = prop_cols]
 lc_wide[, (prop_cols) := lapply(.SD, function(z)
   ifelse(row_sums > 0, z / row_sums, 0)), .SDcols = prop_cols]
 
+file.remove(tif_file) # remove raster, keeping .tar file.
 
 ################################################################################
 # 5) ERA5 + MERGES + OUTPUT -----------------------------------------------------

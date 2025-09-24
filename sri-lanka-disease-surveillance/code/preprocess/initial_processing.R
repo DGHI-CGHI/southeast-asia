@@ -101,47 +101,47 @@ library(tabulapdf)       # ropensci fork; requires rJava
 # ------------------------------------------------------------------------------
 # 0) CONFIG
 # ------------------------------------------------------------------------------
-# Summary: Define project-relative paths using cfg (from .Rprofile) + p() helper.
+# Summary: Define project-relative paths using cfg (from .Rprofile) + file.path() helper.
 
 # 1) No setwd() and no absolute C:\ paths
 #    Everything below is relative to the Sri Lanka subproject root.
 
 # Where to put scratch outputs during processing
 paths <- list(
-  temp_dir = p(cfg$paths$intermediate, "temp"),
-  work_out = p(cfg$paths$intermediate, "outputs"),
-  helpers  = p('code/helpers/helpers.R')
+  temp_dir = file.path(cfg$paths$intermediate, "temp"),
+  work_out = file.path(cfg$paths$intermediate, "outputs"),
+  helpers  = file.path('code/helpers/helpers.R')
 )
 
 
 # 2) Source inputs that should live in the project repo:
 #    Recommend moving PDFs/CSVs under data/raw or data/raw/external.
 #    For now, keep your current filenames but make them relative.
-paths$midyear_pop <- p(cfg$paths$raw, "Mid-year_population_by_district_and_sex_2024.pdf")
-paths$wx_stations <- p(cfg$paths$raw , "SriLanka_Weather_Dataset.csv")
-paths$era5_daily  <- p(cfg$paths$raw, "srilanka_district_daily_era5_areawt.csv")
+paths$midyear_pop <- file.path(cfg$paths$raw, "Mid-year_population_by_district_and_sex_2024.pdf")
+paths$wx_stations <- file.path(cfg$paths$raw , "SriLanka_Weather_Dataset.csv")
+paths$era5_daily  <- file.path(cfg$paths$raw, "srilanka_district_daily_era5_areawt.csv")
 
 
 # 3) Output figures directory inside project
-paths$fig_dir <- p(cfg$paths$reports, "figures")
+paths$fig_dir <- file.path(cfg$paths$reports, "figures")
 
 # 4) Additional named outputs (project-relative)
 paths$outputs <- list(
-  era5_weekly_aggregated = p(cfg$path$intermediate, 'srilanka_district_daily_era5_areawt.csv'),
-  pdf_index_csv   = p(cfg$path$intermediate, 
+  era5_weekly_aggregated = file.path(cfg$path$intermediate, 'srilanka_district_daily_era5_areawt.csv'),
+  pdf_index_csv   = file.path(cfg$path$intermediate, 
                       "sri_lanka_WER_index_of_pdfs.csv"),
-  case_counts_txt = p(cfg$path$intermediate, 
-                      "disease_counts_v4.txt")
+  case_counts_txt = file.path(cfg$path$intermediate, 
+                      "disease_counts.txt")
 )
 
 # 5) ERA5 root **local path** (hydrated by DVC), not s3://
 #    DVC should import/pull into data/raw/era5/
-era5_root <- p(cfg$paths$raw, "era5")
+era5_root <- file.path(cfg$paths$raw, "era5")
 # era5_root <- "s3://dghi-chi/data/se-asia/sri-lanka-disease-surveillance/era5/"
 
 
 # 6) Create any needed directories once (safe if they already exist)
-ensure_dir <- function(...) dir.create(p(...), recursive = TRUE, showWarnings = FALSE)
+ensure_dir <- function(...) dir.create(file.path(...), recursive = TRUE, showWarnings = FALSE)
 ensure_dir(cfg$paths$intermediate, "temp")
 ensure_dir(cfg$paths$intermediate, "outputs")
 ensure_dir(cfg$paths$reports, "figures")
@@ -164,7 +164,7 @@ wer_url  <- paste0(wer_base, "/weekly-epidemiological-report")
 
 idx_html <- read_html(wer_url)
 hrefs    <- html_attr(html_elements(idx_html, "a"), "href")
-pdfs     <- unique(grep("\\.pdf$", hrefs, value = TRUE))
+pdfs     <- unique(grefile.path("\\.pdf$", hrefs, value = TRUE))
 pdfs     <- ifelse(startsWith(pdfs, "http"), pdfs, paste0(wer_base, pdfs))
 pdfs = pdfs[pdfs != 'https://www.epid.gov.lk/storage/post/pdfs/en_63ec87e11b430_WER.pdf']
 
@@ -233,7 +233,7 @@ iso_weeks_in_year <- function(y) {
 parse_issue_from_filename_wer <- function(u, lang = "English") {
   f <- basename(u)
   m <- str_match(f, "(?i)vol[._ -]*(\\d+)[^\\d]+no[._ -]*(\\d+)")
-  if (any(is.na(m))) stop("Could not parse volume/issue from: ", f)
+  if (any(is.na(m))) stofile.path("Could not parse volume/issue from: ", f)
   
   vol   <- as.integer(m[, 2])
   issue <- as.integer(m[, 3])
@@ -474,7 +474,7 @@ for (i in seq_len(nrow(idx))) {
     res$file = cur$file
     res$url = cur$url
     
-    if (max(nchar(res$district)) > 18) stop()
+    if (max(nchar(res$district)) > 18) stofile.path()
         
     
     allresults[[i]] <- res
@@ -508,40 +508,10 @@ lepto_dt[substr(district, nchar(district)-2, nchar(district)) == ' Na', district
 lepto_dt = lepto_dt[district != "Srilanka"]
 
 lepto_dt[,.N,by=district][order(district)]
-lepto_dt[,.N,by=district][order(N)]
+
 
 # Rename districts where records had issues with correct parsing of names. 
 lepto_dt[district == 'Paha', district := 'Gampaha']
-
-
-
-# lepto_dt[district == 'Ampara']
-
-
-dupes <- lepto_dt[district == "Ampara", .N, by = date_start][N > 1]$date_start
-# Relabel the *second and beyond* records for those dates
-lepto_dt[
-  district == "Ampara" & date_start %in% dupes,
-  district := ifelse(seq_len(.N) > 1, "aaaa Ampara", district),
-  by = date_start
-]
-
-
-dupes2 <- lepto_dt[district == "Kalmune", .N, by = date_start][N > 1]$date_start
-
-
-
-lepto_dt[date_start == "2021-12-11" & dengue_A == 1 & dengue_B == 67, district := 'Ampara']
-
-
-ff = lepto_dt[date_start == "2021-12-11"][order(district)]
-ff = unique(ff, by = c("district","dengue_A","dengue_B"))
-
-
-lepto_dt[district == 'aaaa Ampara', district := 'Kalmune']
-lepto_dt[district == 'Kalmunai', district := 'Kalmune']
-lepto_dt[district == 'Kalmunei', district := 'Kalmune']
-
 
 lepto_dt[district == 'Hambantot', district := 'Hambantota']
 
@@ -557,16 +527,62 @@ lepto_dt[district == 'Polonnaruw', district := 'Polonnaruwa']
 lepto_dt[district == 'M31atale', district := 'Matale']
 
 
-# uniquedistricts = unique(lepto_dt$district)[order(unique(lepto_dt$district))]
-# uniquedistricts[substr(uniquedistricts, nchar(uniquedistricts)-3, nchar(uniquedistricts)) == 'tale']
+# Kalmunai is a city in Ampara. seems to have records although not a district
+# do a summartion on matching weeks to get true / total value for Ampara.
+# lepto_dt[district == 'Kalmunai', district := 'Kalmune']
+lepto_dt[district == 'Kalmunei', district := 'Kalmunai']
+lepto_dt[district == 'Kalmune', district := 'Kalmunai']
 
+
+######################################
+######################################
+######################################
+# only ampara has duplicates and it always (its second one for a week) are values for Kalume
+dupes <- lepto_dt[district == "Ampara", .N, by = date_start][N > 1]$date_start
+
+dupes_all <- lepto_dt[, .N, by = .(district, date_start)][N > 1]
+# dupes_all
+
+lepto_dt$id = 1:nrow(lepto_dt)
+uniquedistricts = unique(lepto_dt$district)[order(unique(lepto_dt$district))]
+addeddistricts = list()
+for (add in 1:length(dupes)){
+  
+  districtsdate = lepto_dt[date_start == dupes[add]]$district
+  missingdistrict = uniquedistricts[!uniquedistricts %in% districtsdate]
+  
+  if (length(missingdistrict) > 1) stofile.path()
+  
+  addeddistricts[[add]] = lepto_dt[date_start == dupes[add] & district == 'Ampara'][2]
+  addeddistricts[[add]]$district <- missingdistrict
+ 
+  cat(add, '\n') 
+}
+addeddistricts = rbindlist(addeddistricts)
+
+lepto_dt = rbindlist(list(lepto_dt[!id %in% addeddistricts$id], addeddistricts))
+
+dupes_all <- lepto_dt[, .N, by = .(district, date_start)][N > 1]
+
+if (nrow(dupes_all) > 0){
+  stofile.path("Remaining issue with duplicates for a given district/week.")
+}
+######################################
+######################################
+
+# names(lepto_dt) %in% c("file","url","year","id","table_id")
+cols2sumtogether = names(lepto_dt)[!names(lepto_dt) %in% c("file","url","year","id","table_id",'district','date_start','date_end')]
+
+lepto_dt[district == 'Kalmunai', district := 'Ampara']
+lepto_dt = lepto_dt[,lapply(.SD, sum, na.rm=TRUE), by = c('district', 'date_start', 'date_end'), .SDcols = cols2sumtogether]
+######################################
 
 fwrite(lepto_dt, paths$outputs$case_counts_txt)
 
-berryFunctions::openFile(pdf_path)
+
 # End of script.
-#####################!
-
-
-
 ################################################################################
+
+
+
+
