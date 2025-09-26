@@ -101,11 +101,19 @@ paths$outputs <- list(
                       "disease_counts.txt")
 )
 
+# DEFINE WHERE ERA5 (ERA5 OR ERA5-LAND) TO USE.
+ERA5_TYPE = 'era5land'
+# ERA5_TYPE = 'era5'
+
 # 5) Define ERA5 data root location (S3 bucket - publically accessible).
-# For ERA5.
-era5_root <- 's3://dghi-chi/data/se-asia/sri-lanka-disease-surveillance/era5'
-# FOR ERA5-LAND
-era5_root <- 's3://dghi-chi/data/se-asia/sri-lanka-disease-surveillance/era5land'
+if (ERA5_TYPE == 'era5land'){
+  # FOR ERA5-LAND
+  era5_root <- 's3://dghi-chi/data/se-asia/sri-lanka-disease-surveillance/era5land'
+} else if (ERA5_TYPE == 'era5'){
+  # For ERA5.
+  era5_root <- 's3://dghi-chi/data/se-asia/sri-lanka-disease-surveillance/era5'
+}
+
 
 
 # 6) Create any needed directories once (safe if they already exist)
@@ -126,17 +134,27 @@ ensure_dir(cfg$paths$reports, "figures")
 #        and scaling; a single map prevents drift and simplifies future changes.
 # WHO:   Script maintainers; anyone aligning upstream parquet schemas.
 # ------------------------------------------------------------------------------
+# 
+# # No longer used - simply pulling in all variables instead.
+# VAR_VALIDTIME <- "validTime"             # epoch seconds (UTC) or timestamp
+# VAR_SSRD      <- "ssrd"                  # surface solar radiation downwards (J/m² per hour)
+# VAR_TA10      <- "ta_scaled10_degC"     # air temp (°C * 10)
+# VAR_TD10      <- "td_scaled10_degC"     # dewpoint (°C * 10)
+# VAR_WBGT10    <- "wbgt_scaled10_degC"   # WBGT (°C * 10); may be absent
+# VAR_WIND10    <- "wind2m_scaled10_ms1"  # wind (m/s * 10); fallback handled below
+# VAR_TP        <- "tp"                    # total precipitation (m); sum to daily
 
-VAR_VALIDTIME <- "validTime"             # epoch seconds (UTC) or timestamp
-VAR_SSRD      <- "ssrd"                  # surface solar radiation downwards (J/m² per hour)
-VAR_TA10      <- "ta_scaled10_degC"     # air temp (°C * 10)
-VAR_TD10      <- "td_scaled10_degC"     # dewpoint (°C * 10)
-VAR_WBGT10    <- "wbgt_scaled10_degC"   # WBGT (°C * 10); may be absent
-VAR_WIND10    <- "wind2m_scaled10_ms1"  # wind (m/s * 10); fallback handled below
-VAR_MTPR      <- "mtpr"                  # precip rate (assumed mm/day after daily sum here)
-VAR_TP        <- "tp"                    # total precipitation (m); sum to daily
-VAR_LATIDX    <- "lat_idx_x10"            # 0.25° grid center index  lat = idx/4
-VAR_LONIDX    <- "lon_idx_x10"            # 0.25° grid center index  lon = idx/4
+if (ERA5_TYPE == 'era5land'){
+  # FOR ERA5-LAND
+  # 0.1° grid center index  lon/lon = idx/10
+  VAR_LATIDX    <- "lat_idx_x10"
+  VAR_LONIDX    <- "lon_idx_x10"           
+} else if (ERA5_TYPE == 'era5'){
+  # FOR ERA5 
+  # 0.25° grid center index  lon = idx/4
+  VAR_LATIDX    <- "lat_idx_x4"
+  VAR_LONIDX    <- "lon_idx_x4"
+}
 
 # ------------------------
 # Timezone handling:
@@ -148,7 +166,6 @@ tz_offset_sec <- as.integer(5.5 * 3600)
 # ------------------------
 # Analysis years (adjust as needed)
 years_all   <- 2014:2024
-
 
 # ------------------------------------------------------------------------------
 # 2) SMALL HELPERS  ??? Math utilities for scaling, robust stats, and weighting
@@ -984,6 +1001,174 @@ weekly_weather_features <- function(daily_dt, weeks_dt, cfg = CFG) {
   agg[]
 }
 
+weekly_weather_features <- function(daily_dt, weeks_dt, cfg = CFG) {
+  # Required columns in inputs
+  stopifnot(all(c("district","date") %in% names(daily_dt)))
+  stopifnot(all(c("district","date_start","date_end") %in% names(weeks_dt)))
+  
+  DTd <- data.table::as.data.table(data.table::copy(daily_dt))
+  DTw <- data.table::as.data.table(data.table::copy(weeks_dt))
+  
+  # Ensure types
+  if (!inherits(DTd$date, "Date"))        DTd[,  date := as.Date(date)]
+  if (!inherits(DTw$date_start, "Date"))  DTw[, date_start := as.Date(date_start)]
+  if (!inherits(DTw$date_end, "Date"))    DTw[, date_end   := as.Date(date_end)]
+  
+  # Winsorize daily inputs (only those present)
+  winsor_targets <- intersect(
+    c(
+      # temps & humidity/flux
+      "ta_mean","ta_min","ta_max","wbgt_mean","rh_mean","vpd_mean",
+      "ssrd_MJ_mean","sshf_mean","slhf_mean",
+      # soil moisture layers
+      "swvl1_mean","swvl2_mean","swvl3_mean","swvl4_mean",
+      # additive hydrology (daily totals)
+      "tp_sum","sro_sum","ssro_sum","ro_sum","evabs_sum"
+    ),
+    names(DTd)
+  )
+  if (isTRUE(cfg$WINSORIZE) && length(winsor_targets)) {
+    DTd[, (winsor_targets) := lapply(.SD, winsor, probs = cfg$WINSOR_PROBS), .SDcols = winsor_targets]
+  }
+  
+  # Build a daily "calendar" for each epi week; join daily climate onto it
+  idx <- DTw[, .(district, week_id = .I,
+                 date_start, date_end,
+                 year = data.table::year(date_end),
+                 week_of_year = iso_week(date_end))]
+  
+  wk_days <- idx[
+    , .(date = seq(date_start, date_end, by = "1 day")),
+    by = .(district, week_id, date_start, date_end, year, week_of_year)
+  ]
+  
+  data.table::setkey(DTd, district, date)
+  data.table::setkey(wk_days, district, date)
+  wk <- DTd[wk_days, on = .(district, date)]
+  
+  # Aggregate within each epi week (district × week_id)
+  agg <- wk[, {
+    ndays <- sum(!is.na(date))
+    
+    # ---- helpers that read from the current group (.SD) safely ----
+    gmean <- function(nm)  if (nm %in% names(.SD)) mean_na(.SD[[nm]]) else NA_real_
+    gsum  <- function(nm)  if (nm %in% names(.SD))  sum_na(.SD[[nm]]) else NA_real_
+    gq    <- function(nm,p)if (nm %in% names(.SD))     q_na(.SD[[nm]], p) else NA_real_
+    grng  <- function(nm)  if (nm %in% names(.SD)) {
+      x <- .SD[[nm]]
+      if (all(is.na(x))) NA_real_ else max(x, na.rm=TRUE) - min(x, na.rm=TRUE)
+    } else NA_real_
+    gcount_ge <- function(nm, thr) if (nm %in% names(.SD)) as.numeric(sum(.SD[[nm]] >= thr, na.rm=TRUE)) else NA_real_
+    groll3sum_max <- function(nm) {
+      if (!(nm %in% names(.SD))) return(NA_real_)
+      x <- .SD[[nm]]
+      if (sum(!is.na(x)) >= 3) max(zoo::rollapplyr(x, 3, sum, na.rm = TRUE), na.rm = TRUE) else NA_real_
+    }
+    gwet_spell <- function(nm, thr) {
+      if (!(nm %in% names(.SD))) return(NA_real_)
+      as.numeric(longest_wet_spell(.SD[[nm]], thr = thr))
+    }
+    # ----------------------------------------------------------------
+    
+    res <- list(
+      n_days_week            = as.integer(ndays),
+      # Temperature summaries (°C)
+      tmax_mean              = gmean("ta_max"),
+      tmax_p90               = gq("ta_max", 0.90),
+      tmax_p95               = gq("ta_max", 0.95),
+      tmax_range             = grng("ta_max"),
+      tmin_mean              = gmean("ta_min"),
+      tmean_mean             = gmean("ta_mean"),
+      # Core means (weekly means of daily means)
+      wbgt_mean_week         = gmean("wbgt_mean"),
+      rh_mean_week           = gmean("rh_mean"),
+      vpd_mean_week          = gmean("vpd_mean"),
+      ssrd_MJ_mean_week      = gmean("ssrd_MJ_mean"),
+      sshf_mean_week         = gmean("sshf_mean"),
+      slhf_mean_week         = gmean("slhf_mean"),
+      # Soil moisture (weekly means of daily means)
+      swvl1_mean_week        = gmean("swvl1_mean"),
+      swvl2_mean_week        = gmean("swvl2_mean"),
+      swvl3_mean_week        = gmean("swvl3_mean"),
+      swvl4_mean_week        = gmean("swvl4_mean"),
+      # Hydrology (weekly sums of daily sums)
+      precip_tp_sum_week     = gsum("tp_sum"),
+      runoff_sro_sum_week    = gsum("sro_sum"),
+      runoff_ssro_sum_week   = gsum("ssro_sum"),
+      runoff_ro_sum_week     = gsum("ro_sum"),
+      evabs_sum_week         = gsum("evabs_sum"),
+      # Precip-derived
+      max3d_tp               = groll3sum_max("tp_sum"),
+      wet_days_ge10_tp       = gcount_ge("tp_sum", cfg$WET_MM),
+      # Heat exceedances
+      hot_days_ge32          = gcount_ge("ta_max", cfg$HOT_TMAX)
+    )
+    
+    # Coverage rule: mask if insufficient days (keep n_days_week visible)
+    if (ndays < cfg$MIN_DAYS_PER_WEEK) {
+      keep <- "n_days_week"
+      res[names(res) != keep] <- lapply(res[names(res) != keep], function(.) NA_real_)
+    }
+    res
+  }, by = .(district, week_id, date_start, date_end, year, week_of_year)]
+  
+  # Ordered by time for rolling ops
+  data.table::setorder(agg, district, date_end)
+  
+  # Lags / rolling windows (past-only) for variables that actually exist
+  LAG_VARS <- intersect(
+    c("precip_tp_sum_week",
+      "runoff_ro_sum_week",
+      "tmax_mean","vpd_mean_week","rh_mean_week",
+      "sshf_mean_week","slhf_mean_week"),
+    names(agg)
+  )
+  for (v in LAG_VARS) {
+    for (L in seq_len(cfg$MAX_LAG_WEEKS)) {
+      agg[, paste0(v, "_lag", L) := data.table::shift(get(v), L), by = district]
+    }
+  }
+  for (v in LAG_VARS) {
+    agg[, paste0(v, "_roll2w_mean") := roll_mean_partial(get(v), k = 2, min_obs = 1L), by = district]
+    agg[, paste0(v, "_roll2w_sum")  := roll_sum_partial (get(v), k = 2, min_obs = 1L), by = district]
+    agg[, paste0(v, "_roll4w_mean") := roll_mean_partial(get(v), k = 4, min_obs = 2L), by = district]
+    agg[, paste0(v, "_roll4w_sum")  := roll_sum_partial (get(v), k = 4, min_obs = 2L), by = district]
+  }
+  
+  # EWAP (antecedent precipitation) - tp only if present
+  if ("precip_tp_sum_week" %in% names(agg)) {
+    K <- cfg$EWAP_K; a <- cfg$EWAP_ALPHA
+    agg[, ewap_tp := {
+      x <- precip_tp_sum_week; ew <- x
+      for (k in 1:K) ew <- ew + (a^k) * data.table::shift(x, k, fill = 0)
+      ew
+    }, by = district]
+  }
+  
+  # Climatology (district × ISO week) and anomalies / percent-of-normal
+  CLIM_VARS <- intersect(cfg$ANOMALY_VARS, names(agg))
+  if (length(CLIM_VARS)) {
+    clim <- agg[, lapply(.SD, mean_na), by = .(district, week_of_year), .SDcols = CLIM_VARS]
+    data.table::setnames(clim, CLIM_VARS, paste0(CLIM_VARS, "_clim"))
+    agg <- clim[agg, on = .(district, week_of_year)]
+    for (v in CLIM_VARS) {
+      vc <- paste0(v, "_clim")
+      agg[, paste0(v, "_anom")       := get(v) - get(vc)]
+      agg[, paste0(v, "_pct_normal") := pct_of_normal(get(v), get(vc), eps = 1e-6)]
+    }
+  }
+  
+  # Robust within-district z-scores
+  ZV <- intersect(cfg$ZSCORE_VARS, names(agg))
+  if (length(ZV)) {
+    for (v in ZV) {
+      agg[, paste0(v, "_z") := zscore_robust(get(v)), by = district]
+    }
+  }
+  
+  data.table::setorder(agg, district, date_end)
+  agg[]
+}
 
 # ------------------------------------------------------------------------------
 # 11) EXAMPLE I/O  ??? End-to-end run helpers
@@ -993,22 +1178,19 @@ weekly_weather_features <- function(daily_dt, weeks_dt, cfg = CFG) {
 # WHY:   Copy-paste starter for ad-hoc runs
 # ------------------------------------------------------------------------------
 jj::timed('start')
-out_daily <- summarize_years_area_weighted(2014:2024, weights)
-jj::timed('end')
+# Takes ~1 minute per year for ERA5-Land - J Clark - 20250926 1900 UTC
+out_daily <- summarize_years_area_weighted(years_all, weights)
+fwrite(out_daily, paths$outputs$era5_weekly_aggregated)
 
 
-
-
-
-
-# fwrite(out_daily, paths$outputs$era5_weekly_aggregated)
 
 lepto <- fread(paths$outputs$case_counts_txt)
 weeks_dt <- unique(lepto[, .(district, date_start, date_end)])  # from your WER table
 
 # weekly level features, including lags and rolling sums. 
 features_weekly <- weekly_weather_features(out_daily, weeks_dt)
-fwrite(features_weekly, file.path(cfg$paths$processed, "srilanka_district_weekly_era5_areawt.csv"))
+weekly_out_file <- sprintf("srilanka_district_weekly_%s_areawt.csv", ERA5_TYPE)
+fwrite(features_weekly, file.path(cfg$paths$processed, weekly_out_file))
 
 
 # End Script
