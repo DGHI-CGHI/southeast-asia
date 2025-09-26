@@ -31,7 +31,7 @@
 #     daily aggregation so days reflect health-relevant local timing.
 #   . Spatial: district values are area-weighted using cell×district
 #     intersections computed in an equal-area CRS (EPSG:6933) to avoid bias.
-#   . Precip artifacts: negative totals/rates are clamped to zero.
+#   . Precip artifacts: negative totals/rates are clamped to zero.n
 #   . Week coverage: per-week metrics are masked if <MIN_DAYS_PER_WEEK (default 5).
 #   . Units:
 #       - Temperature/TD/WBGT: °C (scaled×10 in raw ??? unscaled here)
@@ -78,8 +78,6 @@ suppressPackageStartupMessages({
 # Where to put scratch outputs during processing
 paths <- list(
   temp_dir = file.path(cfg$paths$intermediate, "temp")
-  # ,
-  # work_out = file.path(cfg$paths$intermediate, "outputs")
 )
 
 # 
@@ -103,10 +101,13 @@ paths$outputs <- list(
                       "disease_counts.txt")
 )
 
-# 5) ERA5 root **local path** (hydrated by DVC), not s3://
-#    DVC should import/pull into data/raw/era5/
+# 5) Define ERA5 data root location (S3 bucket - publically accessible).
+# For ERA5.
 era5_root <- 's3://dghi-chi/data/se-asia/sri-lanka-disease-surveillance/era5'
-# era5_root = "https://dghi-chi.s3.amazonaws.com/data/se-asia/sri-lanka-disease-surveillance/era5"
+# FOR ERA5-LAND
+era5_root <- 's3://dghi-chi/data/se-asia/sri-lanka-disease-surveillance/era5land'
+
+
 # 6) Create any needed directories once (safe if they already exist)
 ensure_dir <- function(...) dir.create(file.path(...), recursive = TRUE, showWarnings = FALSE)
 ensure_dir(cfg$paths$intermediate, "temp")
@@ -134,8 +135,8 @@ VAR_WBGT10    <- "wbgt_scaled10_degC"   # WBGT (°C * 10); may be absent
 VAR_WIND10    <- "wind2m_scaled10_ms1"  # wind (m/s * 10); fallback handled below
 VAR_MTPR      <- "mtpr"                  # precip rate (assumed mm/day after daily sum here)
 VAR_TP        <- "tp"                    # total precipitation (m); sum to daily
-VAR_LATIDX    <- "lat_idx_x4"            # 0.25° grid center index  lat = idx/4
-VAR_LONIDX    <- "lon_idx_x4"            # 0.25° grid center index  lon = idx/4
+VAR_LATIDX    <- "lat_idx_x10"            # 0.25° grid center index  lat = idx/4
+VAR_LONIDX    <- "lon_idx_x10"            # 0.25° grid center index  lon = idx/4
 
 # ------------------------
 # Timezone handling:
@@ -242,7 +243,10 @@ build_latlon_lookup <- function() {
                      factory_options = list(exclude_invalid_files = TRUE))
   
   # Expect index columns; we compute lat/lon = idx/4 (for 0.25° grid)
-  needed <- c("lat_idx_x4","lon_idx_x4")
+  # needed <- c("lat_idx_x4","lon_idx_x4")
+  # 0.25° grid center index  lon = idx/4
+  
+  needed <- c(VAR_LATIDX, VAR_LONIDX)
   if (!all(needed %in% names(ds))) {
     stop("Parquet missing lat_idx_x4 or lon_idx_x4; include them or add a lookup.")
   }
@@ -253,18 +257,29 @@ build_latlon_lookup <- function() {
     collect()
   
   setDT(coords)
-  coords[, `:=`(
-    lat = as.integer(lat_idx_x4)/4,
-    lon = as.integer(lon_idx_x4)/4,
-    lat_idx_x4 = as.integer(lat_idx_x4)/4,
-    lon_idx_x4 = as.integer(lon_idx_x4)/4
-  )]
+  
+  if (all(needed %like% "x10")){
+    coords[, `:=`(
+      lat = as.integer(lat_idx_x10)/10,
+      lon = as.integer(lon_idx_x10)/10,
+      lat_idx_x10 = as.integer(lat_idx_x10)/10,
+      lon_idx_x10 = as.integer(lon_idx_x10)/10
+    )]
+  } else {
+    coords[, `:=`(
+      lat = as.integer(lat_idx_x4)/4,
+      lon = as.integer(lon_idx_x4)/4,
+      lat_idx_x4 = as.integer(lat_idx_x4)/4,
+      lon_idx_x4 = as.integer(lon_idx_x4)/4
+    )]
+  }
+  
   coords[]
 }
 
 coords_lookup <- build_latlon_lookup()
 
-# Build polygons by computing edges between adjacent centers
+# Build polygons from center coords, dynamically keeping index cols
 make_cell_polygons <- function(coords_lookup) {
   ux <- sort(unique(coords_lookup$lon))
   uy <- sort(unique(coords_lookup$lat))
@@ -298,9 +313,12 @@ make_cell_polygons <- function(coords_lookup) {
     })
   })
   
+  # Retain whichever index columns exist (x4 or x10)
+  idx_cols <- grep("^lat_idx_|^lon_idx_", names(coords), value = TRUE)
+  
   cell_sf <- st_sf(
     lat = coords$lat, lon = coords$lon,
-    lat_idx_x4 = coords$lat_idx_x4, lon_idx_x4 = coords$lon_idx_x4,
+    coords[, ..idx_cols],
     geometry = st_sfc(polys, crs = 4326)
   )
   
@@ -323,6 +341,12 @@ cell_sf_m <- make_cell_polygons(coords_lookup)
 # PERF:  Cache to Parquet/RDS for re-runs; this is deterministic for domain/CRS.
 # ------------------------------------------------------------------------------
 compute_cell_district_weights <- function(cell_sf_m, districts_sf_m) {
+  # Detect which index columns are present
+  idx_cols <- grep("^lat_idx_|^lon_idx_", names(cell_sf_m), value = TRUE)
+  if (length(idx_cols) != 2L) {
+    stop("Expected exactly two index columns (lat/lon), got: ", paste(idx_cols, collapse = ", "))
+  }
+  
   idx <- st_intersects(cell_sf_m, districts_sf_m, sparse = TRUE)
   pairs <- data.table(
     cell_row = rep(seq_along(idx), lengths(idx)),
@@ -334,23 +358,25 @@ compute_cell_district_weights <- function(cell_sf_m, districts_sf_m) {
   for (j in seq_len(nrow(districts_sf_m))) {
     pj <- pairs[dist_row == j]
     if (nrow(pj) == 0) next
-    sub_cells <- cell_sf_m[pj$cell_row, c("lat_idx_x4","lon_idx_x4","cell_area_m2")]
+    
+    # keep index cols + area
+    sub_cells <- cell_sf_m[pj$cell_row, c(idx_cols, "cell_area_m2")]
     inter     <- suppressWarnings(st_intersection(sub_cells, districts_sf_m[j, ]))
     if (nrow(inter) == 0) next
+    
     inter$area_m2 <- as.numeric(st_area(inter))
     inter <- inter[inter$area_m2 > 0, ]
     if (nrow(inter) == 0) next
     
-    out[[j]] <- data.table(
-      lat_idx_x4 = inter$lat_idx_x4,
-      lon_idx_x4 = inter$lon_idx_x4,
-      district   = districts_sf_wgs84$district[j],
-      area_m2    = inter$area_m2
-    )
+    tmp <- as.data.table(inter)[, ..idx_cols]   # keep index cols dynamically
+    tmp[, district := districts_sf_wgs84$district[j]]
+    tmp[, area_m2  := inter$area_m2]
+    
+    out[[j]] <- tmp
   }
   
   weights <- rbindlist(out, use.names = TRUE, fill = TRUE)
-  setkey(weights, lat_idx_x4, lon_idx_x4, district)
+  setkeyv(weights, c(idx_cols, "district"))
   weights
 }
 
@@ -364,70 +390,94 @@ weights <- compute_cell_district_weights(cell_sf_m, districts_sf_m)
 # WHY:   Ensures all hourly inputs are in epidemiology-relevant local time and
 #        consistent physical units before daily aggregation.
 # WHO:   Annual batch step; used by the driver in Section 9.
-# S3:    If `era5_root` starts with s3://, Arrow uses your AWS credentials or
-#        anonymous mode; otherwise reads local DVC cache.
 # ------------------------------------------------------------------------------
 read_one_year_raw <- function(yr) {
-  ydir <- if (grepl("^s3://", era5_root)) {
-    # build URL-ish paths with paste/sprintf to avoid `//` and backslashes
-    sprintf("%s/%d", era5_root, yr)
-  } else {
-    file.path(era5_root, yr)  # local filesystem is fine with file.path()
-  }
-  
+  ydir <- if (grepl("^s3://", era5_root)) sprintf("%s/%d", era5_root, yr) else file.path(era5_root, yr)
   ds <- open_dataset(ydir, format = "parquet",
                      factory_options = list(exclude_invalid_files = TRUE))
   
-  # Some datasets store wind as wind2m_scaled10_ms
+  # Optional inputs present in some schemas
+  HAS <- function(x) x %in% names(ds)
+  
+  # Wind: two possible names
   VAR_WIND10_LOCAL <- if ("wind2m_scaled10_ms1" %in% names(ds)) "wind2m_scaled10_ms1" else "wind2m_scaled10_ms"
   
-  dt <- ds |>
-    select(dplyr::all_of(c(
-      VAR_LATIDX, VAR_LONIDX, VAR_VALIDTIME,
-      VAR_SSRD, VAR_TA10, VAR_TD10, VAR_WBGT10, VAR_WIND10_LOCAL,
-      VAR_MTPR, VAR_TP
-    ))) |>
-    # Localize hour to Asia/Colombo *before* forming daily aggregates
+  # Build the base mutation (timestamp ??? local date/hour). Always available: VAR_VALIDTIME.
+  tbl <- ds |>
     mutate(
       validTime = cast(cast(!!sym(VAR_VALIDTIME), int64()), timestamp("s", timezone = "UTC")),
       local_ts  = cast(cast(validTime, int64()) + tz_offset_sec, timestamp("s")),
       date      = cast(local_ts, date32()),
-      hour      = hour(local_ts),
-      
-      # Unscale °C*10  °C; round to 0.1 to remove integer artifacts
-      ta   = round(cast(!!sym(VAR_TA10),   float64()) / 10, 1),
-      td   = round(cast(!!sym(VAR_TD10),   float64()) / 10, 1),
-      wbgt = round(cast(!!sym(VAR_WBGT10), float64()) / 10, 1),
-      wind = round(cast(!!sym(VAR_WIND10_LOCAL), float64()) / 10, 1),
-      
-      mtpr = cast(!!sym(VAR_MTPR), float64()),    # daily sum later
-      tp   = cast(!!sym(VAR_TP),   float64()),    # in meters; daily sum later
-      
-      # Relative humidity (%) and VPD (kPa) derived from ta/td
-      rh   = exp((17.62 * td) / (243.12 + td) - (17.62 * ta) / (243.12 + ta)) * 100,
-      es   = 0.6108 * exp(17.27 * ta / (ta + 237.3)),
-      ea   = 0.6108 * exp(17.27 * td / (td + 237.3)),
-      vpd  = if_else(es - ea > 0, es - ea, 0.0),
-      
-      # ssrd in J/m² per hour  MJ/m² per hour
-      ssrd_MJ = cast(!!sym(VAR_SSRD), float64()) / 1e6
-    ) |>
-    select(dplyr::all_of(c(VAR_LATIDX, VAR_LONIDX)),
-           date, hour, ta, td, wbgt, wind, rh, vpd, ssrd_MJ, mtpr, tp) |>
+      hour      = hour(local_ts)
+    )
+  
+  # Add derived variables ONLY if sources exist
+  if (HAS(VAR_TA10)) {
+    tbl <- tbl |> mutate(ta = round(cast(!!sym(VAR_TA10), float64()) / 10, 1))
+  }
+  if (HAS(VAR_TD10)) {
+    tbl <- tbl |> mutate(td = round(cast(!!sym(VAR_TD10), float64()) / 10, 1))
+  }
+  if (HAS(VAR_WBGT10)) {
+    tbl <- tbl |> mutate(wbgt = round(cast(!!sym(VAR_WBGT10), float64()) / 10, 1))
+  }
+  if (HAS(VAR_WIND10_LOCAL)) {
+    tbl <- tbl |> mutate(wind = round(cast(!!sym(VAR_WIND10_LOCAL), float64()) / 10, 1))
+  }
+  if (HAS(VAR_TP)) {
+    tbl <- tbl |> mutate(tp = cast(!!sym(VAR_TP), float64()))
+  }
+  if (HAS(VAR_SSRD)) {
+    tbl <- tbl |> mutate(ssrd_MJ = cast(!!sym(VAR_SSRD), float64()) / 1e6)
+  }
+  # RH / VPD only if both ta and td exist
+  if (HAS(VAR_TA10) && HAS(VAR_TD10)) {
+    tbl <- tbl |>
+      mutate(
+        es  = 0.6108 * exp(17.27 * ta / (ta + 237.3)),
+        ea  = 0.6108 * exp(17.27 * td / (td + 237.3)),
+        vpd = if_else(es - ea > 0, es - ea, 0.0),
+        rh  = exp((17.62 * td) / (243.12 + td) - (17.62 * ta) / (243.12 + ta)) * 100
+      )
+  }
+  
+  # Optional raw fields we just pass through if present
+  opt_raw <- intersect(
+    c("slhf","sshf","evabs","ro","ssro","swvl1","swvl2","swvl3","swvl4"),
+    names(ds)
+  )
+  
+  # Index columns must exist per your config (here using VAR_LATIDX/VAR_LONIDX);
+  # if you occasionally get x4 instead of x10, swap the config OR detect dynamically.
+  base_select <- c(VAR_LATIDX, VAR_LONIDX, "date", "hour")
+  
+  # Only keep derived columns that were actually created above
+  derived_present <- intersect(
+    c("ta","td","wbgt","wind","rh","vpd","ssrd_MJ","tp"),
+    names(schema(tbl))
+  )
+  
+  sel <- c(base_select, derived_present, opt_raw)
+  
+  dt <- tbl |>
+    select(dplyr::all_of(sel)) |>
     collect()
   
   setDT(dt)
   
-  # Clamp negative precip artifacts
-  dt[tp   < 0, tp   := 0]
-  dt[mtpr < 0, mtpr := 0]
+  # Clamp negative precip artifacts if present
+  if ("tp" %in% names(dt)) dt[tp < 0, tp := 0]
   
-  # Convert index columns to true 0.25° coordinates for merging with weights
-  setnames(dt, c(VAR_LATIDX, VAR_LONIDX), c("lat_idx_x4","lon_idx_x4"))
-  dt[, `:=`(lat_idx_x4 = as.integer(lat_idx_x4)/4,
-            lon_idx_x4 = as.integer(lon_idx_x4)/4)]
-  dt[]
+  # Sanity check: make sure we kept the two index columns
+  idx_cols <- grep("^lat_idx_|^lon_idx_", names(dt), value = TRUE)
+  if (length(idx_cols) != 2L) {
+    stop("Expected exactly 2 index columns; found: ", paste(idx_cols, collapse = ", "))
+  }
+  
+  dt
 }
+
+
 
 # ------------------------------------------------------------------------------
 # 7) HOURLY ??? DAILY (cell)  ??? Daily means/mins/maxes; precip sums
@@ -440,25 +490,50 @@ read_one_year_raw <- function(yr) {
 cell_day_stats <- function(dt_hourly) {
   if (nrow(dt_hourly) == 0) return(dt_hourly)
   
-  vars_mmm <- c("ta","td","wbgt","wind","rh","vpd","ssrd_MJ")  # mean/min/max per day
-  vars_sum <- c("tp","mtpr")                                  # sum per day
+  # Detect grid index columns (works for x4 or x10)
+  idx_cols <- grep("^lat_idx_|^lon_idx_", names(dt_hourly), value = TRUE)
+  if (length(idx_cols) != 2L) stop("Expected 2 index columns in dt_hourly")
   
-  mmm <- dt_hourly[, c(
-    setNames(lapply(.SD, \(x) mean(x, na.rm = TRUE)), paste0(vars_mmm, "_mean")),
-    setNames(lapply(.SD, \(x) min(x,  na.rm = TRUE)), paste0(vars_mmm, "_min")),
-    setNames(lapply(.SD, \(x) max(x,  na.rm = TRUE)), paste0(vars_mmm, "_max"))
-  ), by = .(lat_idx_x4, lon_idx_x4, date), .SDcols = vars_mmm]
+  # Variables to aggregate
+  vars_mmm <- intersect(
+    c("ta","td","wbgt","wind","rh","vpd",
+      "swvl1","swvl2","swvl3","swvl4",
+      "ssrd_MJ","sshf","slhf"),
+    names(dt_hourly)
+  )
+  vars_sum <- intersect(
+    c("tp","sro","ssro","ro","evabs"),
+    names(dt_hourly)
+  )
   
-  sums <- dt_hourly[, c(
-    setNames(lapply(.SD, \(x) sum(x, na.rm = TRUE)), paste0(vars_sum, "_sum"))
-  ), by = .(lat_idx_x4, lon_idx_x4, date), .SDcols = vars_sum]
+  # --- If sshf/slhf are accumulated J m^-2 per hour and you prefer daily mean W m^-2:
+  #     You could pre-compute hourly W m^-2 here as dt_hourly[, sshf := sshf/3600] etc.,
+  #     then treat them as vars_mmm. Leaving as-is (mmm of hourly values).
   
-  out <- merge(mmm, sums, by = c("lat_idx_x4","lon_idx_x4","date"), all = TRUE)
-  setorder(out, lat_idx_x4, lon_idx_x4, date)
+  # Mean/Min/Max per day (for state variables and flux means)
+  mmm <- if (length(vars_mmm)) {
+    dt_hourly[, c(
+      setNames(lapply(.SD, \(x) mean(x, na.rm = TRUE)), paste0(vars_mmm, "_mean")),
+      setNames(lapply(.SD, \(x) min(x,  na.rm = TRUE)), paste0(vars_mmm, "_min")),
+      setNames(lapply(.SD, \(x) max(x,  na.rm = TRUE)), paste0(vars_mmm, "_max"))
+    ), by = c(idx_cols, "date"), .SDcols = vars_mmm]
+  } else {
+    unique(dt_hourly[, c(idx_cols, "date"), with = FALSE])  # empty shell to merge onto
+  }
+  
+  # Sums per day (for additive water/energy depths)
+  sums <- if (length(vars_sum)) {
+    dt_hourly[, c(
+      setNames(lapply(.SD, \(x) sum(x, na.rm = TRUE)), paste0(vars_sum, "_sum"))
+    ), by = c(idx_cols, "date"), .SDcols = vars_sum]
+  } else {
+    NULL
+  }
+  
+  out <- if (!is.null(sums)) merge(mmm, sums, by = c(idx_cols, "date"), all = TRUE) else mmm
+  # setorder(out, idx_cols, "date")
   out[]
 }
-
-
 # ------------------------------------------------------------------------------
 # 8) cell???district (daily)  ??? Area-weighted aggregation using m² weights
 # WHAT:  Joins cell-daily stats to weights and computes district-daily metrics:
@@ -471,34 +546,47 @@ cell_day_stats <- function(dt_hourly) {
 # ------------------------------------------------------------------------------
 district_day_from_cell_day <- function(cell_daily, weights) {
   if (nrow(cell_daily) == 0) return(cell_daily)
-  x <- merge(cell_daily, weights,
-             by = c("lat_idx_x4","lon_idx_x4"),
-             allow.cartesian = TRUE)
   
-  vars_mmm <- c("ta","td","wbgt","wind","rh","vpd","ssrd_MJ")
+  # Detect index columns
+  idx_cols <- grep("^lat_idx_|^lon_idx_", names(cell_daily), value = TRUE)
+  if (length(idx_cols) != 2L) stop("Expected 2 index columns in cell_daily")
   
+  # Join weights
+  x <- merge(cell_daily, weights, by = idx_cols, allow.cartesian = TRUE)
+  
+  # Base variable names present in mmm/sum outputs
+  # (strip suffixes to identify bases)
+  bases_mmm <- unique(sub("_(mean|min|max)$", "", grep("_(mean|min|max)$", names(x), value = TRUE)))
+  bases_sum <- unique(sub("_sum$", "", grep("_sum$", names(x), value = TRUE)))
+  
+  # Area-weighted aggregation by district × date
   x[, {
-    means <- setNames(
-      lapply(vars_mmm, \(v) aw_mean(get(paste0(v, "_mean")), area_m2)),
-      paste0(vars_mmm, "_mean")
-    )
-    mins  <- setNames(
-      lapply(vars_mmm, \(v) suppressWarnings(min(get(paste0(v, "_min")), na.rm = TRUE))),
-      paste0(vars_mmm, "_min")
-    )
-    maxs  <- setNames(
-      lapply(vars_mmm, \(v) suppressWarnings(max(get(paste0(v, "_max")), na.rm = TRUE))),
-      paste0(vars_mmm, "_max")
-    )
-    # Area-weighted means of daily precipitation sums  district daily totals
-    tp_aw   <- aw_mean(tp_sum,   area_m2)
-    mtpr_aw <- aw_mean(mtpr_sum, area_m2)
+    # For each base in mmm: area-weighted mean of *_mean ; plain min of *_min ; plain max of *_max
+    means <- if (length(bases_mmm)) {
+      setNames(lapply(bases_mmm, \(v) aw_mean(get(paste0(v, "_mean")), area_m2)),
+               paste0(bases_mmm, "_mean"))
+    } else list()
     
-    as.list(c(means, mins, maxs,
-              tp_sum = tp_aw,
-              mtpr_sum = mtpr_aw))
+    mins <- if (length(bases_mmm)) {
+      setNames(lapply(bases_mmm, \(v) suppressWarnings(min(get(paste0(v, "_min")), na.rm = TRUE))),
+               paste0(bases_mmm, "_min"))
+    } else list()
+    
+    maxs <- if (length(bases_mmm)) {
+      setNames(lapply(bases_mmm, \(v) suppressWarnings(max(get(paste0(v, "_max")), na.rm = TRUE))),
+               paste0(bases_mmm, "_max"))
+    } else list()
+    
+    # For sums (tp/sro/ssro/ro/evabs): area-weighted mean of cell totals ??? district daily areal mean
+    sums <- if (length(bases_sum)) {
+      setNames(lapply(bases_sum, \(v) aw_mean(get(paste0(v, "_sum")), area_m2)),
+               paste0(bases_sum, "_sum"))
+    } else list()
+    
+    as.list(c(means, mins, maxs, sums))
   }, by = .(district, date)][order(district, date)]
 }
+
 
 # ------------------------------------------------------------------------------
 # 9) DRIVER  ??? Loop years ??? hourly read ??? cell-daily ??? district-daily
@@ -507,20 +595,80 @@ district_day_from_cell_day <- function(cell_daily, weights) {
 # WHO:   Primary entrypoint when generating/refreshing the daily CSV.
 # I/O:   Writes srilanka_district_daily_era5_areawt.csv to project outputs.
 # ------------------------------------------------------------------------------
-summarize_years_area_weighted <- function(years) {
+# summarize_years_area_weighted <- function(years) {
+#   res_list <- vector("list", length(years))
+#   for (i in seq_along(years)) {
+#     yr <- years[i]
+#     message("Processing ", yr, " .")
+#     hr <- read_one_year_raw(yr)
+#     if (!all(c("lat_idx_x4","lon_idx_x4","date") %in% names(hr))) {
+#       stop("Hourly frame missing lat_idx_x4/lon_idx_x4/date after read for year ", yr)
+#     }
+#     cd <- cell_day_stats(hr)
+#     dd <- district_day_from_cell_day(cd, weights)
+#     dd[, year := yr]
+#     res_list[[i]] <- dd
+#   }
+#   rbindlist(res_list, use.names = TRUE, fill = TRUE)
+# }
+
+# ------------------------------------------------------------------------------
+# Driver: orchestrate year-by-year workflow
+# ------------------------------------------------------------------------------
+summarize_years_area_weighted <- function(years, weights_tbl = NULL) {
+  if (is.null(weights_tbl)) {
+    weights_tbl <- get0("weights", inherits = TRUE)
+    if (is.null(weights_tbl)) stop("No 'weights' provided and none found in parent/global env.")
+  }
+  
   res_list <- vector("list", length(years))
   for (i in seq_along(years)) {
     yr <- years[i]
     message("Processing ", yr, " .")
-    hr <- read_one_year_raw(yr)
-    if (!all(c("lat_idx_x4","lon_idx_x4","date") %in% names(hr))) {
-      stop("Hourly frame missing lat_idx_x4/lon_idx_x4/date after read for year ", yr)
+    
+    hr <- read_one_year_raw(yr)  # robust to missing cols
+    setDT(hr)
+    
+    # Ensure we have a Date column (read_one_year_raw adds it)
+    if (!"date" %in% names(hr)) stop("No 'date' in hourly data for year ", yr)
+    
+    # Index columns present?
+    idx_cols <- grep("^lat_idx_|^lon_idx_", names(hr), value = TRUE)
+    if (length(idx_cols) != 2L) {
+      stop("Hourly frame missing grid index columns for year ", yr,
+           ". Found: ", paste(names(hr), collapse = ", "))
     }
+    
+    # Daily cell aggregates (robust)
     cd <- cell_day_stats(hr)
-    dd <- district_day_from_cell_day(cd, weights)
+    
+    # --- Ensure join keys match the weights' key space (degrees vs indices) ---
+    w_idx <- grep("^lat_idx_|^lon_idx_", names(weights_tbl), value = TRUE)
+    if (length(w_idx) != 2L) stop("Weights table must have two index columns.")
+    
+    # If cd indices look like integers but weights' indices look like decimals, rescale cd
+    intish <- function(x) all(is.finite(x)) && mean(abs(x - round(x)), na.rm = TRUE) < 1e-6
+    decish <- function(x) any(is.finite(x)) && mean(abs(x - round(x)), na.rm = TRUE) > 1e-6
+    
+    need_scale <- intish(cd[[idx_cols[1]]]) && decish(weights_tbl[[w_idx[1]]])
+    
+    if (need_scale) {
+      # Pick scale from suffix (x10 or x4)
+      if (grepl("x10$", idx_cols[1])) {
+        scl <- 10
+      } else if (grepl("x4$", idx_cols[1])) {
+        scl <- 4
+      } else {
+        stop("Cannot infer scale from index column names: ", paste(idx_cols, collapse = ", "))
+      }
+      cd[, (idx_cols) := lapply(.SD, function(z) as.numeric(z) / scl), .SDcols = idx_cols]
+    }
+    
+    dd <- district_day_from_cell_day(cd, weights_tbl)
     dd[, year := yr]
     res_list[[i]] <- dd
   }
+  
   rbindlist(res_list, use.names = TRUE, fill = TRUE)
 }
 
@@ -592,20 +740,44 @@ pct_of_normal <- function(x, clim, eps = 1e-6) {
   out
 }
 
-# Configuration for features
+# # Configuration for features
+# CFG <- list(
+#   WINSORIZE    = TRUE,
+#   WINSOR_PROBS = c(0.01, 0.99),
+#   HOT_TMAX     = 32,    # °C threshold for hot-day counts
+#   WET_MM       = 10,    # "wet day" threshold (mm)
+#   MAX_LAG_WEEKS= 6,
+#   ROLL_WINDOWS = c(2, 4),
+#   EWAP_ALPHA   = 0.8,   # exponentially-weighted antecedent precip
+#   EWAP_K       = 4,
+#   ANOMALY_VARS = c("precip_tp_sum_week","tmax_mean","rh_mean_week"),
+#   ZSCORE_VARS  = c("precip_tp_sum_week","precip_mtpr_sum_week","tmax_mean","vpd_mean_week"),
+#   MIN_DAYS_PER_WEEK = 5 # require 5/7 days in week to compute metrics
+# )
+
 CFG <- list(
-  WINSORIZE    = TRUE,
-  WINSOR_PROBS = c(0.01, 0.99),
-  HOT_TMAX     = 32,    # °C threshold for hot-day counts
-  WET_MM       = 10,    # "wet day" threshold (mm)
-  MAX_LAG_WEEKS= 6,
-  ROLL_WINDOWS = c(2, 4),
-  EWAP_ALPHA   = 0.8,   # exponentially-weighted antecedent precip
-  EWAP_K       = 4,
-  ANOMALY_VARS = c("precip_tp_sum_week","tmax_mean","rh_mean_week"),
-  ZSCORE_VARS  = c("precip_tp_sum_week","precip_mtpr_sum_week","tmax_mean","vpd_mean_week"),
-  MIN_DAYS_PER_WEEK = 5 # require 5/7 days in week to compute metrics
+  WINSORIZE           = TRUE,
+  WINSOR_PROBS        = c(0.01, 0.99),
+  HOT_TMAX            = 32,    # °C threshold for hot-day counts
+  WET_MM              = 10,    # "wet day" threshold (mm)
+  MAX_LAG_WEEKS       = 6,
+  ROLL_WINDOWS        = c(2, 4),
+  EWAP_ALPHA          = 0.8,   # exponentially-weighted antecedent precip
+  EWAP_K              = 4,
+  # Use intersection with names(agg) later, so extra entries are harmless.
+  ANOMALY_VARS        = c("precip_tp_sum_week",
+                          "runoff_ro_sum_week",
+                          "tmax_mean",
+                          "rh_mean_week","vpd_mean_week",
+                          "ssrd_MJ_mean_week","sshf_mean_week","slhf_mean_week",
+                          "swvl1_mean_week","swvl2_mean_week","swvl3_mean_week","swvl4_mean_week"),
+  ZSCORE_VARS         = c("precip_tp_sum_week",
+                          "runoff_ro_sum_week",
+                          "tmax_mean","vpd_mean_week",
+                          "sshf_mean_week","slhf_mean_week"),
+  MIN_DAYS_PER_WEEK   = 5
 )
+
 
 weekly_weather_features <- function(daily_dt, weeks_dt, cfg = CFG) {
   # Required columns in inputs
@@ -616,24 +788,31 @@ weekly_weather_features <- function(daily_dt, weeks_dt, cfg = CFG) {
   DTw <- as.data.table(copy(weeks_dt))
   
   # Ensure types
-  if (!inherits(DTd$date, "Date")) DTd[,  date := as.Date(date)]
-  if (!inherits(DTw$date_start, "Date")) DTw[, date_start := as.Date(date_start)]
-  if (!inherits(DTw$date_end, "Date"))   DTw[, date_end   := as.Date(date_end)]
+  if (!inherits(DTd$date, "Date"))        DTd[,  date := as.Date(date)]
+  if (!inherits(DTw$date_start, "Date"))  DTw[, date_start := as.Date(date_start)]
+  if (!inherits(DTw$date_end, "Date"))    DTw[, date_end   := as.Date(date_end)]
   
-  # Winsorize some daily inputs to reduce outlier impact (optional)
-  num_cols <- intersect(
-    c("ta_mean","ta_min","ta_max","wbgt_mean","rh_mean","vpd_mean",
-      "ssrd_MJ_mean","tp_sum","mtpr_sum"),
+  # Optional winsorization of daily inputs (only those present)
+  winsor_targets <- intersect(
+    c(
+      # temps & humidity/flux
+      "ta_mean","ta_min","ta_max","wbgt_mean","rh_mean","vpd_mean",
+      "ssrd_MJ_mean","sshf_mean","slhf_mean",
+      # soil moisture layers
+      "swvl1_mean","swvl2_mean","swvl3_mean","swvl4_mean",
+      # additive hydrology
+      "tp_sum","sro_sum","ssro_sum","ro_sum","evabs_sum"
+    ),
     names(DTd)
   )
-  if (cfg$WINSORIZE && length(num_cols)) {
-    DTd[, (num_cols) := lapply(.SD, winsor, probs = cfg$WINSOR_PROBS), .SDcols = num_cols]
+  if (cfg$WINSORIZE && length(winsor_targets)) {
+    DTd[, (winsor_targets) := lapply(.SD, winsor, probs = cfg$WINSOR_PROBS), .SDcols = winsor_targets]
   }
   
-  # Build a daily "calendar" for each epi week; join daily climate onto it
+  # Build a daily calendar for each epi week; join daily climate onto it
   idx <- DTw[, .(district, week_id = .I,
                  date_start, date_end,
-                 year = year(date_end),
+                 year = data.table::year(date_end),
                  week_of_year = iso_week(date_end))]
   
   wk_days <- idx[
@@ -645,55 +824,98 @@ weekly_weather_features <- function(daily_dt, weeks_dt, cfg = CFG) {
   setkey(wk_days, district, date)
   wk <- DTd[wk_days, on = .(district, date)]
   
-  # Aggregate within each epi week (district × week_id)
+  # Helper to safely compute weekly mean of a daily column if present
+  wmean_col <- function(col) if (col %in% names(wk)) mean_na(get(col)) else NA_real_
+  wsum_col  <- function(col) if (col %in% names(wk)) sum_na(get(col))  else NA_real_
+  wroll3sum_max <- function(col) {
+    if (!(col %in% names(wk))) return(NA_real_)
+    x <- get(col)
+    if (sum(!is.na(x)) >= 3) max(zoo::rollapplyr(x, 3, sum, na.rm = TRUE), na.rm = TRUE) else NA_real_
+  }
+  wwet_spell <- function(col, thr = cfg$WET_MM) {
+    if (!(col %in% names(wk))) return(NA_real_)
+    as.numeric(longest_wet_spell(get(col), thr = thr))
+  }
+  wcount_ge <- function(col, thr) {
+    if (!(col %in% names(wk))) return(NA_real_)
+    as.numeric(sum(get(col) >= thr, na.rm = TRUE))
+  }
+  
+  # Weekly aggregation (district × week_id)
   agg <- wk[, {
     ndays <- sum(!is.na(date))
-    tmax <- ta_max; tmin <- ta_min; tmean <- ta_mean
-    wbgt <- wbgt_mean; rh <- rh_mean; vpd <- vpd_mean
-    ssrd <- ssrd_MJ_mean
-    tp   <- tp_sum        # daily precipitation (units consistent with earlier steps)
-    mtpr <- mtpr_sum
     
-    # Rolling 3-day maxima within the week (requires 3 non-NA days)
-    max3_tp   <- if (sum(!is.na(tp))   >= 3) max(zoo::rollapplyr(tp,   3, sum, na.rm = TRUE), na.rm = TRUE) else NA_real_
-    max3_mtpr <- if (sum(!is.na(mtpr)) >= 3) max(zoo::rollapplyr(mtpr, 3, sum, na.rm = TRUE), na.rm = TRUE) else NA_real_
+    # Temperature: daily columns expected from earlier daily aggregation
+    #   ta_max, ta_min, ta_mean  ??? weekly summaries below
+    tmax_mean <- if ("ta_max" %in% names(wk)) mean_na(ta_max) else NA_real_
+    tmax_p90  <- if ("ta_max" %in% names(wk)) q_na(ta_max, 0.90) else NA_real_
+    tmax_p95  <- if ("ta_max" %in% names(wk)) q_na(ta_max, 0.95) else NA_real_
+    tmax_rng  <- if ("ta_max" %in% names(wk)) {
+      if (all(is.na(ta_max))) NA_real_ else max(ta_max, na.rm = TRUE) - min(ta_max, na.rm = TRUE)
+    } else NA_real_
+    tmin_mean <- if ("ta_min" %in% names(wk)) mean_na(ta_min) else NA_real_
+    tmean_mean<- if ("ta_mean" %in% names(wk)) mean_na(ta_mean) else NA_real_
     
-    # Weekly metrics
+    # Core means (weekly means of daily means)
+    wbgt_mean_week   <- wmean_col("wbgt_mean")
+    rh_mean_week     <- wmean_col("rh_mean")
+    vpd_mean_week    <- wmean_col("vpd_mean")
+    ssrd_MJ_mean_week<- wmean_col("ssrd_MJ_mean")
+    sshf_mean_week   <- wmean_col("sshf_mean")
+    slhf_mean_week   <- wmean_col("slhf_mean")
+    
+    # Soil moisture (weekly means of daily means)
+    swvl1_mean_week  <- wmean_col("swvl1_mean")
+    swvl2_mean_week  <- wmean_col("swvl2_mean")
+    swvl3_mean_week  <- wmean_col("swvl3_mean")
+    swvl4_mean_week  <- wmean_col("swvl4_mean")
+    
+    # Additive hydrology (weekly sums of daily sums)
+    precip_tp_sum_week <- wsum_col("tp_sum")
+    runoff_sro_sum_week<- wsum_col("sro_sum")
+    runoff_ssro_sum_week<- wsum_col("ssro_sum")
+    runoff_ro_sum_week <- wsum_col("ro_sum")
+    evabs_sum_week     <- wsum_col("evabs_sum")
+    
+    # Wet-day metrics and 3-day maxima (for precipitation; tp only)
+    max3d_tp            <- wroll3sum_max("tp_sum")
+    wet_days_ge10_tp    <- wcount_ge("tp_sum", cfg$WET_MM)
+    
+    # Heat exceedances (hot day count by ta_max threshold)
+    hot_days_ge32       <- if ("ta_max" %in% names(wk)) wcount_ge("ta_max", cfg$HOT_TMAX) else NA_real_
+    
     res <- list(
       n_days_week            = as.integer(ndays),
-      
-      # Temperature summaries (°C)
-      tmax_mean              = mean_na(tmax),
-      tmax_p90               = q_na(tmax, 0.90),
-      tmax_p95               = q_na(tmax, 0.95),
-      tmax_range             = if (all(is.na(tmax))) NA_real_ else max(tmax, na.rm = TRUE) - min(tmax, na.rm = TRUE),
-      tmin_mean              = mean_na(tmin),
-      tmean_mean             = mean_na(tmean),
-      wbgt_mean_week         = mean_na(wbgt),     # °C
-      
-      # Moisture & evaporative demand
-      rh_mean_week           = mean_na(rh),       # %
-      vpd_mean_week          = mean_na(vpd),      # kPa
-      
-      # Radiation (MJ/m² per day  weekly mean)
-      ssrd_MJ_mean_week      = mean_na(ssrd),
-      
-      # Weekly precipitation totals (units follow daily sums)
-      precip_tp_sum_week     = sum_na(tp),
-      precip_mtpr_sum_week   = sum_na(mtpr),
-      
-      # Wet-day counts (threshold in mm)
-      wet_days_ge10_tp       = as.numeric(sum(tp   >= cfg$WET_MM, na.rm = TRUE)),
-      wet_days_ge10_mtpr     = as.numeric(sum(mtpr >= cfg$WET_MM, na.rm = TRUE)),
-      
-      # 3-day maxima and longest wet spells
-      max3d_tp               = max3_tp,
-      max3d_mtpr             = max3_mtpr,
-      wet_spell_maxlen_tp    = as.numeric(longest_wet_spell(tp,   thr = cfg$WET_MM)),
-      wet_spell_maxlen_mtpr  = as.numeric(longest_wet_spell(mtpr, thr = cfg$WET_MM)),
-      
-      # Heat exceedances
-      hot_days_ge32          = as.numeric(sum(ta_max >= cfg$HOT_TMAX, na.rm = TRUE))
+      # temps
+      tmax_mean              = tmax_mean,
+      tmax_p90               = tmax_p90,
+      tmax_p95               = tmax_p95,
+      tmax_range             = tmax_rng,
+      tmin_mean              = tmin_mean,
+      tmean_mean             = tmean_mean,
+      # core
+      wbgt_mean_week         = wbgt_mean_week,
+      rh_mean_week           = rh_mean_week,
+      vpd_mean_week          = vpd_mean_week,
+      ssrd_MJ_mean_week      = ssrd_MJ_mean_week,
+      sshf_mean_week         = sshf_mean_week,
+      slhf_mean_week         = slhf_mean_week,
+      # soil moisture
+      swvl1_mean_week        = swvl1_mean_week,
+      swvl2_mean_week        = swvl2_mean_week,
+      swvl3_mean_week        = swvl3_mean_week,
+      swvl4_mean_week        = swvl4_mean_week,
+      # hydrology sums
+      precip_tp_sum_week     = precip_tp_sum_week,
+      runoff_sro_sum_week    = runoff_sro_sum_week,
+      runoff_ssro_sum_week   = runoff_ssro_sum_week,
+      runoff_ro_sum_week     = runoff_ro_sum_week,
+      evabs_sum_week         = evabs_sum_week,
+      # precip-derived
+      max3d_tp               = max3d_tp,
+      wet_days_ge10_tp       = wet_days_ge10_tp,
+      # heat exceedances
+      hot_days_ge32          = hot_days_ge32
     )
     
     # Coverage rule: mask if insufficient days (keep n_days_week visible)
@@ -704,12 +926,15 @@ weekly_weather_features <- function(daily_dt, weeks_dt, cfg = CFG) {
     res
   }, by = .(district, week_id, date_start, date_end, year, week_of_year)]
   
-  # Ordered by time for rolling ops
-  setorder(agg, district, date_end)
+  # Order for rolling ops
+  data.table::setorder(agg, district, date_end)
   
-  # Lags and rolling windows (past-only) for selected variables
+  # Lags / rolling windows (past-only) for a curated set
   LAG_VARS <- intersect(
-    c("precip_tp_sum_week","precip_mtpr_sum_week","rh_mean_week","tmax_mean","vpd_mean_week"),
+    c("precip_tp_sum_week",
+      "runoff_ro_sum_week",
+      "tmax_mean","vpd_mean_week","rh_mean_week",
+      "sshf_mean_week","slhf_mean_week"),
     names(agg)
   )
   for (v in LAG_VARS) {
@@ -717,8 +942,6 @@ weekly_weather_features <- function(daily_dt, weeks_dt, cfg = CFG) {
       agg[, paste0(v, "_lag", L) := data.table::shift(get(v), L), by = district]
     }
   }
-  
-  # Rolling windows with partial coverage (2w mean/sum, 4w mean/sum)
   for (v in LAG_VARS) {
     agg[, paste0(v, "_roll2w_mean") := roll_mean_partial(get(v), k = 2, min_obs = 1L), by = district]
     agg[, paste0(v, "_roll2w_sum")  := roll_sum_partial (get(v), k = 2, min_obs = 1L), by = district]
@@ -726,18 +949,11 @@ weekly_weather_features <- function(daily_dt, weeks_dt, cfg = CFG) {
     agg[, paste0(v, "_roll4w_sum")  := roll_sum_partial (get(v), k = 4, min_obs = 2L), by = district]
   }
   
-  # Exponentially-weighted antecedent precipitation (EWAP)
-  K <- cfg$EWAP_K; a <- cfg$EWAP_ALPHA
+  # EWAP (antecedent precipitation) - tp only
   if ("precip_tp_sum_week" %in% names(agg)) {
+    K <- cfg$EWAP_K; a <- cfg$EWAP_ALPHA
     agg[, ewap_tp := {
       x <- precip_tp_sum_week; ew <- x
-      for (k in 1:K) ew <- ew + (a^k) * data.table::shift(x, k, fill = 0)
-      ew
-    }, by = district]
-  }
-  if ("precip_mtpr_sum_week" %in% names(agg)) {
-    agg[, ewap_mtpr := {
-      x <- precip_mtpr_sum_week; ew <- x
       for (k in 1:K) ew <- ew + (a^k) * data.table::shift(x, k, fill = 0)
       ew
     }, by = district]
@@ -747,7 +963,7 @@ weekly_weather_features <- function(daily_dt, weeks_dt, cfg = CFG) {
   CLIM_VARS <- intersect(cfg$ANOMALY_VARS, names(agg))
   if (length(CLIM_VARS)) {
     clim <- agg[, lapply(.SD, mean_na), by = .(district, week_of_year), .SDcols = CLIM_VARS]
-    setnames(clim, CLIM_VARS, paste0(CLIM_VARS, "_clim"))
+    data.table::setnames(clim, CLIM_VARS, paste0(CLIM_VARS, "_clim"))
     agg <- clim[agg, on = .(district, week_of_year)]
     for (v in CLIM_VARS) {
       vc <- paste0(v, "_clim")
@@ -756,7 +972,7 @@ weekly_weather_features <- function(daily_dt, weeks_dt, cfg = CFG) {
     }
   }
   
-  # Robust within-district z-scores for select variables
+  # Robust within-district z-scores
   ZV <- intersect(cfg$ZSCORE_VARS, names(agg))
   if (length(ZV)) {
     for (v in ZV) {
@@ -764,19 +980,27 @@ weekly_weather_features <- function(daily_dt, weeks_dt, cfg = CFG) {
     }
   }
   
-  setorder(agg, district, date_end)
+  data.table::setorder(agg, district, date_end)
   agg[]
 }
+
 
 # ------------------------------------------------------------------------------
 # 11) EXAMPLE I/O  ??? End-to-end run helpers
 # WHAT:  Illustrates running the pipeline across all years, timing execution,
 #        and writing outputs. Includes examples for joining weekly features back
 #        to WER case data for modeling.
-# WHY:   Copy-paste starter for ad-hoc runs and student onboarding.
-# WHO:   Anyone testing or extending the pipeline.
+# WHY:   Copy-paste starter for ad-hoc runs
 # ------------------------------------------------------------------------------
-out_daily <- summarize_years_area_weighted(years_all)
+jj::timed('start')
+out_daily <- summarize_years_area_weighted(2014:2024, weights)
+jj::timed('end')
+
+
+
+
+
+
 # fwrite(out_daily, paths$outputs$era5_weekly_aggregated)
 
 lepto <- fread(paths$outputs$case_counts_txt)
