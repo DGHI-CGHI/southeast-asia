@@ -91,6 +91,12 @@ library(tabulapdf)       # ropensci fork; requires rJava
 # 1) No setwd() and no absolute C:\ pathsa
 #    Everything below is relative to the Sri Lanka subproject root.
 
+# Define which ERA5 (ERA5 or ERA5-LAND) to utilize.
+# DEFINE WHERE ERA5 (ERA5 OR ERA5-LAND) TO USE.
+ERA5_TYPE = 'era5land'
+# ERA5_TYPE = 'era5'
+
+
 # Where to put scratch outputs during processing
 paths <- list(
   temp_dir = file.path(cfg$paths$intermediate, "temp"),
@@ -105,7 +111,14 @@ paths <- list(
 paths$midyear_pop <- file.path(cfg$paths$raw,
                        "Mid-year_population_by_district_and_sex_2024.pdf")
 paths$wx_stations <- file.path(cfg$paths$raw , "station_data/SriLanka_Weather_Dataset.csv")
-paths$era5_daily  <- file.path(cfg$paths$raw, "srilanka_district_daily_era5_areawt.csv")
+# 5) Define ERA5 data root location (S3 bucket - publically accessible).
+if (ERA5_TYPE == 'era5land'){
+  # FOR ERA5-LAND
+  paths$era5_daily  <- file.path(cfg$paths$raw, "srilanka_district_daily_era5land_areawt.csv")
+} else if (ERA5_TYPE == 'era5'){
+  # For ERA5.
+  paths$era5_daily  <- file.path(cfg$paths$raw, "srilanka_district_daily_era5_areawt.csv")
+}
 
 # 3) Output figures directory inside project
 paths$fig_dir <- file.path(cfg$paths$reports, "figures")
@@ -422,13 +435,13 @@ stopifnot(all(c("date", "district") %in% names(era5_weekly_features)))
 era5_weekly_features[, district := norm_dist(district)]
 era5_weekly_features[, date := as.IDate(date)]
 
-# -- 5.2 Join weather STATION (district × day) to weekly (by date_mid) -----------------
-setnames(wx_daily, "date", "wx_date")
-setkey(lep, district, date_mid)
-setkey(wx_daily, district, wx_date)
-lep <- wx_daily[lep, on = .(district, wx_date = date_mid)]  # left join onto lep
+# # -- 5.2 Join weather STATION (district × day) to weekly (by date_mid) -----------------
+# setnames(wx_daily, "date", "wx_date")
+# setkey(lep, district, date_mid)
+# setkey(wx_daily, district, wx_date)
+# lep <- wx_daily[lep, on = .(district, wx_date = date_mid)]  # left join onto lep
 
-names(lep)
+# names(lep)
 
 # -- 5.3 Join land cover + era5_weekly_features (align era5_weekly_features date to date_mid) ------------------
 lep <- merge(lep, lc_wide, by = "district", all.x = TRUE)
@@ -449,13 +462,13 @@ lep = lep[year(date_start) <= 2024] # climate data persists through 2024 as of n
 lep = lep[year(date_start) >= 2014]
 
 # names(lep)
-
+outfilename = sprintf("sri_lanka-disease-landcover-climate-2015_2024-%s.csv", ERA5_TYPE)
 # # -- 5.4 Persist final analysis dataset ----------------------------------------
-fwrite(lep, file.path(cfg$paths$intermediate, "sri_lanka-disease-landcover-climate-2015_2024.csv"))
+fwrite(lep, file.path(cfg$paths$intermediate, outfilename))
 
 message("Saved analysis panel: ",
         normalizePath(
-          file.path(cfg$paths$intermediate, "sri_lanka-disease-landcover-climate-2015_2024.csv"),
+          file.path(cfg$paths$intermediate, outfilename),
           winslash = "/"
         ))
 
