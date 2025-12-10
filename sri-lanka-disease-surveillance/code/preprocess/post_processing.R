@@ -112,26 +112,27 @@ paths$midyear_pop <- file.path(cfg$paths$raw,
                        "Mid-year_population_by_district_and_sex_2024.pdf")
 paths$wx_stations <- file.path(cfg$paths$raw , "station_data/SriLanka_Weather_Dataset.csv")
 # 5) Define ERA5 data root location (S3 bucket - publically accessible).
-if (ERA5_TYPE == 'era5land'){
-  # FOR ERA5-LAND
-  paths$era5_daily  <- file.path(cfg$paths$raw, "srilanka_district_daily_era5land_areawt.csv")
-} else if (ERA5_TYPE == 'era5'){
-  # For ERA5.
-  paths$era5_daily  <- file.path(cfg$paths$raw, "srilanka_district_daily_era5_areawt.csv")
-}
 
 # 3) Output figures directory inside project
 paths$fig_dir <- file.path(cfg$paths$reports, "figures")
 
-# 4) Additional named outputs (project-relative)
+
+# Decide path for era5_weekly_aggregated first
+era5_weekly_file <- if (ERA5_TYPE == "era5land") {
+  file.path(cfg$path$processed, "srilanka_district_weekly_era5land_areawt.csv")
+} else if (ERA5_TYPE == "era5") {
+  file.path(cfg$path$processed, "srilanka_district_weekly_era5_areawt.csv")
+} else {
+  stop("ERA5_TYPE must be either 'era5land' or 'era5'")
+}
+
+# Now safely build the list
 paths$outputs <- list(
-  era5_weekly_aggregated = file.path(
-    cfg$path$processed,
-    'srilanka_district_weekly_era5_areawt.csv'
-  ),
+  era5_weekly_aggregated = era5_weekly_file,
   pdf_index_csv   = file.path(cfg$path$intermediate, "sri_lanka_WER_index_of_pdfs.csv"),
-  case_counts_txt = file.path(cfg$path$intermediate, "disease_counts.txt")
+  case_counts_txt = file.path(cfg$path$intermediate, "disease_counts_v5.txt")
 )
+
 
 # 5) ERA5 root **local path** (hydrated by DVC), not s3://
 #    DVC should import/pull into data/raw/era5/
@@ -159,90 +160,135 @@ source(paths$helpers)
 ################################################################################
 # SECTION GOAL: Read district-week disease counts, normalize, and precompute dates.
 lep <- fread(paths$outputs$case_counts_txt)
-
-# Normalize key fields and derive mid-week date (used for daily joins)
-lep[, date_mid := as.IDate(date_start + (as.integer(date_end - date_start) / 2))]
-lep[, `:=`(
-  district = norm_dist(district),
-  date_mid = as.IDate(date_mid),
-  date_end = as.IDate(date_end)
-)]
-lep$year = lubridate::year(lep$date_start)
-
-################################################################################
-# 2) POPULATION: PDF  TIDY (or CSV fallback) ----------------------------------
-################################################################################
-# SECTION GOAL: Produce pop_dt with columns [district, year, poptot].
-# Preference order:
-#   (A) CHI_POP_CSV provided   read directly (no Java)
-#   (B) Else parse from PDF via tabulizer (requires Java stack)
-# NOTE: Requires working rJava/Tabulizer on your machine; handled with tryCatch.
-pop_dt <- NULL
-if (file.exists(paths$midyear_pop)) {
-  tabs <- tryCatch(
-    extract_tables(
-      paths$midyear_pop,
-      method = "lattice",
-      guess = TRUE,
-      output = "tibble"
-    ),
-    error = function(e)
-      NULL
-  )
-  if (!is.null(tabs) && length(tabs) >= 1) {
-    yrs <- 2014:2023
-    pieces <- list()
-    for (pg in seq_along(tabs)) {
-      tb <- as.data.table(tabs[[pg]])
-      yrheads <- names(tb)[names(tb) %like% paste(yrs, collapse = "|")]
-      if (!length(yrheads))
-        next
-      # For each detected year column, grab District names + "Total" col under that year
-      for (yh in yrheads) {
-        district_names <- tb$District[-1]
-        col_idx <- which(tb[1] == "Total")[which(names(tb) == yh)]
-        if (!length(col_idx))
-          next
-        vals <- tb[[col_idx]][-1]
-        pieces[[length(pieces) + 1L]] <- data.table(
-          year    = as.integer(gsub("\\*", "", yh)),
-          district = district_names,
-          poptot  = as.numeric(gsub(",", "", vals)) * 1000
-        )
-      }
-    }
-    pop_dt <- rbindlist(pieces, fill = TRUE)
-    pop_dt[, district := norm_dist(district)]
-  }
-}
-stopifnot(!is.null(pop_dt) && nrow(pop_dt) > 0)
-pop_dt
-pop_dt = pop_dt[!is.na(district)] # remove national level totals.
-
-# lep[!district %in% pop_dt$district][,.N,by=district]
-# lep[district %in% pop_dt$district][,.N,by=district][order(district)]
-
-# current mid year pop data starts in 2014, so for years in health data before that, simply using 2014 pop for now.
-lep[, year2merge := fifelse(year >= 2014, year, 2014L)]
-lep <- merge(
-  lep,
-  pop_dt,
-  by.x = c("district", "year2merge"),
-  by.y = c("district", "year"),
-  all.x = TRUE
-)
-
-# -- 2.4 Compute rates per 100k -------------------------------------------------
-lep[, `:=`(
-  lepto_100k  = (lepto  / poptot) * 1e5,
-  dengue_100k = (dengue / poptot) * 1e5
-)]
-
-lep[, year := NULL] # year no longer needed after merge
-
-
-
-
+# 
+# # Normalize key fields and derive mid-week date (used for daily joins)
+# lep[, date_mid := as.IDate(date_start + (as.integer(date_end - date_start) / 2))]
+# lep[, `:=`(
+#   district = norm_dist(district),
+#   date_mid = as.IDate(date_mid),
+#   date_end = as.IDate(date_end)
+# )]
+# lep$year = lubridate::year(lep$date_start)
+# 
+# ################################################################################
+# # 2) POPULATION: PDF  TIDY (or CSV fallback) ----------------------------------
+# ################################################################################
+# # SECTION GOAL: Produce pop_dt with columns [district, year, poptot].
+# # Preference order:
+# #   (A) CHI_POP_CSV provided   read directly (no Java)
+# #   (B) Else parse from PDF via tabulizer (requires Java stack)
+# # NOTE: Requires working rJava/Tabulizer on your machine; handled with tryCatch.
+# pop_dt <- NULL
+# if (file.exists(paths$midyear_pop)) {
+#   tabs <- tryCatch(
+#     extract_tables(
+#       paths$midyear_pop,
+#       method = "lattice",
+#       guess = TRUE,
+#       output = "tibble"
+#     ),
+#     error = function(e)
+#       NULL
+#   )
+#   if (!is.null(tabs) && length(tabs) >= 1) {
+#     yrs <- 2014:2024
+#     pieces <- list()
+#     for (pg in seq_along(tabs)) {
+#       tb <- as.data.table(tabs[[pg]])
+#       yrheads <- names(tb)[names(tb) %like% paste(yrs, collapse = "|")]
+#       if (!length(yrheads))
+#         next
+#       # For each detected year column, grab District names + "Total" col under that year
+#       # for (yh in yrheads) {
+#         district_names <- tb$District[-1]
+#         
+#         which(tb[1] == 'Total')
+#         
+#         totalcols = names(tb)[which(tb[1] == 'Total')]
+#         
+#          
+#         tb2 = tb[,c('District',totalcols),with=FALSE]
+#         
+#         names(tb2) <- c("District", gsub("\\*","",yrheads))
+#         
+#         tb2 = tail(tb2, -1)
+#         
+#         for (acc in 2:ncol(tb2)){
+#           tb2[[acc]] <- as.numeric(gsub(",","",tb2[[acc]])) * 1000
+#         }
+#         # district_names <- tb$District[-1]
+#         # col_idx <- which(tb[1] == "Total")[which(names(tb) == yh)]
+#         # if (!length(col_idx))
+#         #   next
+#         # vals <- tb[[col_idx]][-1]
+#         # pieces[[length(pieces) + 1L]] <- data.table(
+#         #   year    = as.integer(gsub("\\*", "", yh)),
+#         #   district = district_names,
+#         #   poptot  = as.numeric(gsub(",", "", vals)) * 1000
+#         # )
+#       # }
+#         pieces[[pg]] <- tb2
+#     }
+#     
+#     
+#     
+#     pieces_long <- lapply(pieces, function(dt) {
+#       melt(
+#         dt,
+#         id.vars      = "District",
+#         variable.name = "year",
+#         value.name    = "poptot"
+#       )[
+#         , year := as.integer(as.character(year))
+#       ]
+#     })
+#     
+#     pop_dt <- rbindlist(pieces_long)
+#     
+#     ## optional: standardize column names and sort
+#     setnames(pop_dt, "District", "district")
+#     setcolorder(pop_dt, c("district", "year", "poptot"))
+#     setorder(pop_dt, district, year)
+#     
+#     pop_dt[, district := norm_dist(district)]
+#   }
+# }
+# stopifnot(!is.null(pop_dt) && nrow(pop_dt) > 0)
+# pop_dt
+# pop_dt = pop_dt[!is.na(district)] # remove national level totals.
+# 
+# # lep[!district %in% pop_dt$district][,.N,by=district]
+# # lep[district %in% pop_dt$district][,.N,by=district][order(district)]
+# 
+# # current mid year pop data starts in 2014, so for years in health data before that, simply using 2014 pop for now.
+# lep[, year2merge := fifelse(year >= 2014, year, 2014L)]
+# lep <- merge(
+#   lep,
+#   pop_dt,
+#   by.x = c("district", "year2merge"),
+#   by.y = c("district", "year"),
+#   all.x = TRUE
+# )
+# 
+# # -- 2.4 Compute rates per 100k -------------------------------------------------
+# lep[, `:=`(
+#   lepto_100k  = (lepto  / poptot) * 1e5,
+#   dengue_100k = (dengue / poptot) * 1e5
+# )]
+# 
+# lep[, year := NULL] # year no longer needed after merge
+# 
+# 
+# lep = lep[year2merge  != 2025]
+# 
+# # lep[district == 'Ampara' & is.na(poptot)]
+# # 
+# # lep[district == 'Ampara' & year2merge == 2020 & !is.na(poptot)]
+# # lep[district == 'Ampara' & year2merge == 2020 & is.na(poptot)]
+# # 
+# # lep[district == 'Ampara' & is.na(poptot)][,.N,by=year2merge]
+# # 
+# 
 
 # ################################################################################
 # # 3) WEATHER: MAP STATIONS  DISTRICTS & AGG DAILY -----------------------------
@@ -258,25 +304,25 @@ lep[, year := NULL] # year no longer needed after merge
 # stopifnot(all(c("time", "latitude", "longitude", "city") %in% names(wx)))
 # if (!inherits(wx$time, "Date"))
 #   wx[, time := as.IDate(time)]
-# 
-# # -- Assign each unique (city, lat, lon) to a district via spatial join --------
-# gadm_zip <- "https://geodata.ucdavis.edu/gadm/gadm4.1/shp/gadm41_LKA_shp.zip"
-# tdir <- tempfile("lka_gadm41_")
-# dir.create(tdir)
-# zipfile <- file.path(tdir, "gadm41_LKA_shp.zip")
-# download.file(gadm_zip, destfile = zipfile, mode = "wb", quiet = TRUE)
-# unzip(zipfile, exdir = tdir)
-# adm2_shp <- list.files(tdir,
-#                        pattern = "^gadm41_LKA_2\\.shp$",
-#                        full.names = TRUE,
-#                        recursive = TRUE)
-# stopifnot(length(adm2_shp) == 1)
-# 
-# adm2 <- st_read(adm2_shp, quiet = TRUE)[, c("GID_2", "NAME_1", "NAME_2", "geometry")]
-# names(adm2) <- c("gid2", "province", "district", "geometry")
-# adm2$district <- norm_dist(adm2$district)
-# adm2 <- st_make_valid(adm2)
-# 
+
+# -- Assign each unique (city, lat, lon) to a district via spatial join --------
+gadm_zip <- "https://geodata.ucdavis.edu/gadm/gadm4.1/shp/gadm41_LKA_shp.zip"
+tdir <- tempfile("lka_gadm41_")
+dir.create(tdir)
+zipfile <- file.path(tdir, "gadm41_LKA_shp.zip")
+download.file(gadm_zip, destfile = zipfile, mode = "wb", quiet = TRUE)
+unzip(zipfile, exdir = tdir)
+adm2_shp <- list.files(tdir,
+                       pattern = "^gadm41_LKA_2\\.shp$",
+                       full.names = TRUE,
+                       recursive = TRUE)
+stopifnot(length(adm2_shp) == 1)
+
+adm2 <- st_read(adm2_shp, quiet = TRUE)[, c("GID_2", "NAME_1", "NAME_2", "geometry")]
+names(adm2) <- c("gid2", "province", "district", "geometry")
+adm2$district <- norm_dist(adm2$district)
+adm2 <- st_make_valid(adm2)
+
 # stations_lu <- unique(wx[, .(city, latitude, longitude)])
 # stations_sf <- st_as_sf(
 #   stations_lu,
@@ -423,8 +469,27 @@ file.remove(tif_file) # remove raster, keeping .tar file.
 # SECTION GOAL: Join district-daily ERA5 to weekly disease by aligning on
 # date_mid; add weather & land cover; write final analysis panel.
 
+
+
+# > file.path(cfg$paths$processed, weekly_out_file)
+# [1] "data/processed/srilanka_district_weekly_era5land_areawt.csv"
+# paths$outputs$era5_weekly_aggregated
+
+
+
+
 # -- 5.1 ERA5 input -------------------------------------------------------------
 era5_weekly_features <- fread(paths$outputs$era5_weekly_aggregated)
+
+
+
+era5_weekly_features = fread("data/processed/srilanka_district_weekly_era5land_areawt.csv")
+as.data.frame(jj::countna(era5_weekly_features))
+
+
+# era5_weekly_features = fread("data/processed/srilanka_district_weekly_era5_areawt.csv")
+# as.data.frame(jj::countna(era5_weekly_features))
+
 
 era5_weekly_features[, date := as.IDate(date_start + (as.integer(date_end - date_start) / 2))]
 era5_weekly_features$date_start=NULL
@@ -443,6 +508,8 @@ era5_weekly_features[, date := as.IDate(date)]
 
 # names(lep)
 
+# lep = copy(lepog)
+
 # -- 5.3 Join land cover + era5_weekly_features (align era5_weekly_features date to date_mid) ------------------
 lep <- merge(lep, lc_wide, by = "district", all.x = TRUE)
 
@@ -457,14 +524,22 @@ lep <- merge(
   all.x = TRUE
 )
 
-lep = lep[year(date_start) <= 2024] # climate data persists through 2024 as of now.
+startyear = 2014
+endyear   = 2024
+
+lep = lep[year(date_start) <= endyear] # climate data persists through 2024 as of now.
 # start in 2014, since that is when mid year population data starts
-lep = lep[year(date_start) >= 2014]
+lep = lep[year(date_start) >= startyear]
+
+lep[, date_mid := as.IDate(date_start + (as.integer(date_end - date_start) / 2))]
+lep$date = lep$date_mid
 
 # names(lep)
-outfilename = sprintf("sri_lanka-disease-landcover-climate-2015_2024-%s.csv", ERA5_TYPE)
+outfilename = sprintf("sri_lanka-disease-landcover-climate-%s_%s-%s.csv", 
+                      startyear, endyear, ERA5_TYPE)
 # # -- 5.4 Persist final analysis dataset ----------------------------------------
 fwrite(lep, file.path(cfg$paths$intermediate, outfilename))
+# names(lep)
 
 message("Saved analysis panel: ",
         normalizePath(
